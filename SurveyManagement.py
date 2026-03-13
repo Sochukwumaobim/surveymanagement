@@ -70,6 +70,7 @@ class SurveyManagement:
         self.menu = self.tr(u'&Survey Management System')
         self.db_connection = None
         self.db_manager = DatabaseManager()
+        self.dialog = None  # Store dialog reference
         self.first_start = None
         
         # Check if we have saved settings
@@ -125,7 +126,7 @@ class SurveyManagement:
         self.add_action(
             icon_path,
             text=self.tr(u'Survey Management System'),
-            callback=self.run,
+            callback=self.run,  # This calls the run method
             parent=self.iface.mainWindow())
 
         # Add database connection settings
@@ -166,6 +167,10 @@ class SurveyManagement:
         # Close database connection if open
         if self.db_connection and not self.db_connection.closed:
             self.db_connection.close()
+            
+        # Close dialog if open
+        if self.dialog and self.dialog.isVisible():
+            self.dialog.close()
 
     def show_connection_dialog(self):
         """Show connection configuration dialog"""
@@ -344,9 +349,12 @@ class SurveyManagement:
                 tables = ['surveys', 'survey_points', 'survey_boundaries', 'survey_documents']
                 counts = []
                 for table in tables:
-                    cur.execute(f"SELECT COUNT(*) FROM {table}")
-                    count = cur.fetchone()[0]
-                    counts.append(f"• {table}: {count} records")
+                    try:
+                        cur.execute(f"SELECT COUNT(*) FROM {table}")
+                        count = cur.fetchone()[0]
+                        counts.append(f"• {table}: {count} records")
+                    except:
+                        counts.append(f"• {table}: Table not found")
                 
                 cur.close()
                 
@@ -380,12 +388,12 @@ class SurveyManagement:
         <html>
         <head>
             <style>
-                body { font-family: Arial, sans-serif; margin: 20px; }
-                h1 { color: #2c3e50; font-size: 18pt; }
-                h2 { color: #27ae60; font-size: 14pt; margin-top: 20px; }
-                ul { margin-left: 20px; }
-                li { margin: 5px 0; }
-                .footer { margin-top: 30px; color: #7f8c8d; font-style: italic; }
+                body {{ font-family: Arial, sans-serif; margin: 20px; }}
+                h1 {{ color: #2c3e50; font-size: 18pt; }}
+                h2 {{ color: #27ae60; font-size: 14pt; margin-top: 20px; }}
+                ul {{ margin-left: 20px; }}
+                li {{ margin: 5px 0; }}
+                .footer {{ margin-top: 30px; color: #7f8c8d; font-style: italic; }}
             </style>
         </head>
         <body>
@@ -403,7 +411,7 @@ class SurveyManagement:
             <ul>
                 <li>📋 Survey metadata management</li>
                 <li>📍 Direct coordinate input</li>
-                <li>📐 Bearing & distance traverse calculator</li>
+                <li>📐 Bearing & distance traverse calculator with DMS support</li>
                 <li>📄 Document management with checksum verification</li>
                 <li>🗄️ Direct PostGIS layer loading</li>
                 <li>🔍 Advanced search and retrieval</li>
@@ -446,7 +454,7 @@ class SurveyManagement:
         )
 
     def run(self):
-        """Run the main plugin dialog"""
+        """Run the main plugin dialog - NON-MODAL version"""
         # Show message that we're starting
         self.iface.messageBar().pushMessage(
             "Info", 
@@ -493,13 +501,33 @@ class SurveyManagement:
             )
             return
         
-        # Create and show the dialog
+        # Create and show the dialog - NON-MODAL!
         try:
-            # Pass None for parent to make it a top-level window
+            # Check if dialog already exists and is visible
+            if self.dialog is not None and self.dialog.isVisible():
+                # Just bring it to front
+                self.dialog.raise_()
+                self.dialog.activateWindow()
+                return
+            
+            # Create new dialog
             self.dialog = SurveyManagementDialog(self.iface.mainWindow(), db_connection)
             
-            # Set window modality to ApplicationModal to block interaction with QGIS
-            self.dialog.setWindowModality(Qt.ApplicationModal)
+            # CRITICAL: Set dialog to be NON-MODAL
+            self.dialog.setWindowModality(Qt.NonModal)
+            
+            # Make it a regular window that doesn't block
+            self.dialog.setWindowFlags(
+                Qt.Window |
+                Qt.WindowTitleHint |
+                Qt.WindowSystemMenuHint |
+                Qt.WindowMinimizeButtonHint |
+                Qt.WindowMaximizeButtonHint |
+                Qt.WindowCloseButtonHint
+            )
+            
+            # Connect close event to cleanup
+            self.dialog.finished.connect(self.on_dialog_closed)
             
             # Show dialog
             self.dialog.show()
@@ -519,3 +547,7 @@ class SurveyManagement:
                 f"An unexpected error occurred:\n\n{str(e)}\n\n"
                 f"Please check the Python console for details."
             )
+
+    def on_dialog_closed(self):
+        """Handle dialog close event"""
+        self.dialog = None
