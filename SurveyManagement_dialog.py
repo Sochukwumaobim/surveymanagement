@@ -5,7 +5,7 @@
                                  A QGIS plugin
  Digital archiving for Nigerian survey records
                               -------------------
-        begin                : 2026-03-12
+        begin                : 2026-03-13
         copyright            : (C) 2026 by ASTROMAT GEO-SERVICES
         email                : ugwusochukwuma@gmail.com
  ***************************************************************************/
@@ -22,7 +22,6 @@ from functools import partial
 
 from qgis.PyQt import uic
 from qgis.PyQt.QtCore import Qt, QDate, QUrl, QThread, pyqtSignal
-# Add QAbstractItemView to the imports at the top of the file
 from qgis.PyQt.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLineEdit, QComboBox, QDateEdit, QPushButton,
@@ -31,9 +30,10 @@ from qgis.PyQt.QtWidgets import (
     QTabWidget, QWidget, QApplication, QStackedWidget,
     QFileDialog, QCheckBox, QProgressDialog, QSpinBox,
     QDoubleSpinBox, QGridLayout, QSplitter, QTreeWidget,
-    QTreeWidgetItem, QProgressBar, QAbstractItemView  # <-- ADD THIS
+    QTreeWidgetItem, QProgressBar, QAbstractItemView,
+    QStatusBar, QSystemTrayIcon, QMenu
 )
-from qgis.PyQt.QtGui import QColor, QFont
+from qgis.PyQt.QtGui import QColor, QFont, QIcon
 
 # QGIS imports
 from qgis.core import (
@@ -499,6 +499,8 @@ class BearingInputWidget(QWidget):
 
 
 class SurveyManagementDialog(QDialog, FORM_CLASS):
+    """Main dialog for Survey Management System"""
+    
     def __init__(self, parent=None, db_connection=None):
         """Constructor."""
         super(SurveyManagementDialog, self).__init__(parent)
@@ -511,6 +513,9 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
         self.current_survey_id = None
         self.current_srid = 26332  # Default to Nigeria Mid Belt
         self.pdf_base_path = "C:\\SurveyRecords\\"  # Default base path for PDFs
+        self.minimize_to_tray = True
+        self.tray_icon = None
+        self.table_data = None
         
         # Store reference to iface
         self.iface = parent
@@ -520,11 +525,26 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
                             PSYCOPG2_AVAILABLE and 
                             not db_connection.closed)
         
-        # Set window properties - MAKE IT NON-MODAL!
+        # Set window properties - NON-MODAL TOOL WINDOW
         self.setWindowTitle("Survey Management System - Nigerian Survey Records")
         self.setMinimumWidth(1200)
         self.setMinimumHeight(800)
-        self.setWindowFlags(Qt.Window)  # Allow interaction with QGIS
+        
+        # Set window flags for non-modal operation
+        self.setWindowFlags(
+            Qt.Window |
+            Qt.WindowTitleHint |
+            Qt.WindowSystemMenuHint |
+            Qt.WindowMinimizeButtonHint |
+            Qt.WindowMaximizeButtonHint |
+            Qt.WindowCloseButtonHint
+        )
+        
+        # Make it non-modal
+        self.setWindowModality(Qt.NonModal)
+        
+        # Allow interaction with parent even when dialog is open
+        #self.setAttribute(Qt.WA_ShowModal, False)
         
         # Center the dialog
         self.center_on_screen()
@@ -535,6 +555,13 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
         
         # Create main layout
         self.create_main_layout()
+        
+        # Create status bar for silent messages
+        self.status_bar = QStatusBar()
+        self.layout().addWidget(self.status_bar)
+        
+        # Create system tray icon
+        self.create_tray_icon()
         
         # Load initial data if database available
         if self.db_available:
@@ -548,6 +575,103 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
         screen_center = QApplication.primaryScreen().availableGeometry().center()
         frame_geometry.moveCenter(screen_center)
         self.move(frame_geometry.topLeft())
+        
+    def show_status(self, message, timeout=3000):
+        """Show message in status bar instead of popup"""
+        self.status_bar.showMessage(message, timeout)
+
+    def create_tray_icon(self):
+        """Create system tray icon for background operation"""
+        # Check if system tray is supported
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        
+        icon_path = os.path.join(os.path.dirname(__file__), 'icon.png')
+        if os.path.exists(icon_path):
+            self.tray_icon = QSystemTrayIcon(self)
+            self.tray_icon.setIcon(QIcon(icon_path))
+            self.tray_icon.setToolTip("Survey Management System")
+            
+            # Create tray menu
+            tray_menu = QMenu()
+            
+            show_action = tray_menu.addAction("Show Window")
+            show_action.triggered.connect(self.show_window)
+            
+            hide_action = tray_menu.addAction("Hide to Tray")
+            hide_action.triggered.connect(self.hide)
+            
+            tray_menu.addSeparator()
+            
+            quit_action = tray_menu.addAction("Exit")
+            quit_action.triggered.connect(self.close)
+            
+            self.tray_icon.setContextMenu(tray_menu)
+            self.tray_icon.activated.connect(self.on_tray_activated)
+            
+            self.tray_icon.show()
+
+    def on_tray_activated(self, reason):
+        """Handle tray icon activation"""
+        if reason == QSystemTrayIcon.DoubleClick:
+            self.show_window()
+
+    def show_window(self):
+        """Show and restore window"""
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def changeEvent(self, event):
+        """Handle window state changes"""
+        if event.type() == event.WindowStateChange:
+            if self.windowState() & Qt.WindowMinimized and self.minimize_to_tray and self.tray_icon:
+                self.hide()
+                self.tray_icon.showMessage(
+                    "Survey Management System",
+                    "Application minimized to system tray",
+                    QSystemTrayIcon.Information,
+                    2000
+                )
+        super().changeEvent(event)
+
+    def closeEvent(self, event):
+        """Handle close event"""
+        if self.tray_icon and self.tray_icon.isVisible():
+            self.tray_icon.hide()
+        
+        # Clean up database connection
+        if self.db_connection and not self.db_connection.closed:
+            self.db_connection.close()
+        
+        event.accept()
+
+    def toggle_always_on_top(self, checked):
+        """Toggle always on top behavior"""
+        flags = self.windowFlags()
+        if checked:
+            flags |= Qt.WindowStaysOnTopHint
+        else:
+            flags &= ~Qt.WindowStaysOnTopHint
+        self.setWindowFlags(flags)
+        self.show()
+
+    def hide_to_tray(self):
+        """Hide window to system tray"""
+        self.hide()
+        if self.tray_icon:
+            self.tray_icon.showMessage(
+                "Survey Management System",
+                "Application running in background.\nDouble-click tray icon to show.",
+                QSystemTrayIcon.Information,
+                3000
+            )
+
+    def float_window(self):
+        """Float the window (remove any docking behavior)"""
+        self.setWindowFlags(Qt.Window)
+        self.show()
+        self.center_on_screen()
 
     def ensure_document_table_exists(self):
         """Ensure the survey_documents table exists"""
@@ -673,23 +797,46 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
         self.setup_traverse_tab()
         self.setup_postgis_tab()
         
+        # Window behavior options
+        float_group = QGroupBox("Window Behavior")
+        float_layout = QHBoxLayout()
+        
+        self.always_on_top_cb = QCheckBox("Always on Top")
+        self.always_on_top_cb.toggled.connect(self.toggle_always_on_top)
+        float_layout.addWidget(self.always_on_top_cb)
+        
+        self.minimize_to_tray_cb = QCheckBox("Minimize to System Tray")
+        self.minimize_to_tray_cb.setChecked(True)
+        self.minimize_to_tray_cb.toggled.connect(lambda x: setattr(self, 'minimize_to_tray', x))
+        float_layout.addWidget(self.minimize_to_tray_cb)
+        
+        float_layout.addStretch()
+        float_group.setLayout(float_layout)
+        main_layout.addWidget(float_group)
+        
         # Bottom buttons
         button_layout = QHBoxLayout()
         button_layout.addStretch()
         
-        self.minimize_btn = QPushButton("⏱️ Keep Open")
-        self.minimize_btn.setMinimumWidth(120)
+        self.minimize_btn = QPushButton("➖ Minimize")
+        self.minimize_btn.setMinimumWidth(100)
         self.minimize_btn.setStyleSheet("background-color: #3498db; color: white; font-weight: bold;")
         self.minimize_btn.clicked.connect(self.showMinimized)
         button_layout.addWidget(self.minimize_btn)
         
-        self.hide_btn = QPushButton("👁️ Hide to Tray")
+        self.hide_btn = QPushButton("⬇️ Hide to Tray")
         self.hide_btn.setMinimumWidth(120)
         self.hide_btn.setStyleSheet("background-color: #f39c12; color: white; font-weight: bold;")
-        self.hide_btn.clicked.connect(self.hide)
+        self.hide_btn.clicked.connect(self.hide_to_tray)
         button_layout.addWidget(self.hide_btn)
         
-        close_btn = QPushButton("Close")
+        self.float_btn = QPushButton("🪟 Float")
+        self.float_btn.setMinimumWidth(100)
+        self.float_btn.setStyleSheet("background-color: #9b59b6; color: white; font-weight: bold;")
+        self.float_btn.clicked.connect(self.float_window)
+        button_layout.addWidget(self.float_btn)
+        
+        close_btn = QPushButton("✖ Close")
         close_btn.setMinimumWidth(100)
         close_btn.setStyleSheet("background-color: #e74c3c; color: white; font-weight: bold;")
         close_btn.clicked.connect(self.close)
@@ -698,8 +845,8 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
         main_layout.addLayout(button_layout)
         
         # Hint about non-modal mode
-        hint = QLabel("💡 This window stays open while you work in QGIS. Click 'Hide to Tray' to temporarily hide it.")
-        hint.setStyleSheet("color: #7f8c8d; font-style: italic;")
+        hint = QLabel("💡 This window is NON-MODAL - you can work in QGIS while keeping it open!")
+        hint.setStyleSheet("color: #27ae60; font-weight: bold;")
         main_layout.addWidget(hint)
         
         self.setLayout(main_layout)
@@ -895,10 +1042,7 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
                 display_text = f"ID:{survey_id} | {plan_number} | {owner_name} | {date_str}"
                 self.survey_search_results.addItem(display_text, survey_id)
             
-            QMessageBox.information(
-                self, "Search Complete",
-                f"Found {len(results)} survey(s). Select one from the dropdown."
-            )
+            self.show_status(f"Found {len(results)} surveys")
             
         except Exception as e:
             QMessageBox.critical(self, "Database Error", str(e))
@@ -1006,16 +1150,210 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
             self.save_survey_btn.setEnabled(True)
             self.refresh_documents_list()
             
-            QMessageBox.information(
-                self, "Survey Loaded",
-                f"✅ Survey loaded successfully!\n\n"
-                f"ID: {sid}\n"
-                f"Plan: {plan_number}\n"
-                f"Owner: {owner_name}"
-            )
+            self.show_status(f"Loaded survey: {plan_number}")
             
         except Exception as e:
             QMessageBox.critical(self, "Database Error", str(e))
+
+    # ========== SURVEY SAVE METHODS ==========
+    def save_survey_metadata(self):
+        """Save new survey to database"""
+        if not self.db_available:
+            QMessageBox.warning(self, "No Database", "Database not connected")
+            return
+        
+        if not self.plan_number.text() or not self.owner_name.text():
+            QMessageBox.warning(self, "Validation Error", "Plan Number and Owner Name are required")
+            return
+        
+        # Check if we're overwriting
+        if self.current_survey_id:
+            reply = QMessageBox.question(
+                self, "Confirm Save",
+                f"A survey is currently loaded (ID: {self.current_survey_id}).\n"
+                f"Do you want to SAVE AS NEW SURVEY?\n\n"
+                f"Click 'Yes' to create a new survey.\n"
+                f"Click 'No' to cancel.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply == QMessageBox.No:
+                return
+        
+        try:
+            # Get CRS value
+            crs_text = self.crs_combo.currentText()
+            if crs_text == "Custom EPSG (specify below)":
+                crs_value = self.custom_crs.text().strip()
+                if crs_value:
+                    crs_value = f"EPSG:{crs_value}"
+                else:
+                    crs_value = None
+            else:
+                crs_value = crs_text.split(" - ")[0]
+            
+            cur = self.db_connection.cursor()
+            
+            # Insert new survey
+            cur.execute("""
+                INSERT INTO surveys 
+                (plan_number, owner_name, survey_date, original_crs, 
+                 surveyor_name, local_government, state, notes)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING survey_id
+            """, (
+                self.plan_number.text().strip(),
+                self.owner_name.text().strip(),
+                self.survey_date.date().toPyDate(),
+                crs_value,
+                self.surveyor.text().strip() or None,
+                self.lga.text().strip() or None,
+                self.state.currentText(),
+                self.notes.toPlainText().strip() or None
+            ))
+            
+            survey_id = cur.fetchone()[0]
+            self.db_connection.commit()
+            cur.close()
+            
+            # Update current survey
+            self.current_survey_id = survey_id
+            self.survey_id_display.setText(str(survey_id))
+            self.current_survey_label.setText(
+                f"📋 Current Survey: {self.plan_number.text()} (ID: {survey_id})"
+            )
+            self.update_survey_btn.setEnabled(True)
+            
+            # Success message
+            QMessageBox.information(
+                self, "Success",
+                f"✅ New survey saved successfully!\n\nSurvey ID: {survey_id}"
+            )
+            
+            # Refresh lists
+            self.load_recent_surveys()
+            self.refresh_documents_list()
+            
+        except psycopg2.IntegrityError:
+            self.db_connection.rollback()
+            QMessageBox.critical(
+                self, "Duplicate Plan Number",
+                f"Plan number '{self.plan_number.text()}' already exists.\n"
+                f"Please use a unique plan number."
+            )
+        except Exception as e:
+            self.db_connection.rollback()
+            QMessageBox.critical(self, "Database Error", str(e))
+
+    def update_survey_metadata(self):
+        """Update existing survey in database"""
+        if not self.db_available:
+            QMessageBox.warning(self, "No Database", "Database not connected")
+            return
+        
+        if not self.current_survey_id:
+            QMessageBox.warning(
+                self, "No Survey",
+                "No survey is currently loaded for editing.\n"
+                "Please search and load a survey first."
+            )
+            return
+        
+        if not self.plan_number.text() or not self.owner_name.text():
+            QMessageBox.warning(self, "Validation Error", "Plan Number and Owner Name are required")
+            return
+        
+        # Confirm update
+        reply = QMessageBox.question(
+            self, "Confirm Update",
+            f"Are you sure you want to UPDATE Survey ID {self.current_survey_id}?\n\n"
+            f"Plan: {self.plan_number.text()}\n"
+            f"Owner: {self.owner_name.text()}\n\n"
+            f"This will overwrite the existing record.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        
+        if reply == QMessageBox.No:
+            return
+        
+        try:
+            # Get CRS value
+            crs_text = self.crs_combo.currentText()
+            if crs_text == "Custom EPSG (specify below)":
+                crs_value = self.custom_crs.text().strip()
+                if crs_value:
+                    crs_value = f"EPSG:{crs_value}"
+                else:
+                    crs_value = None
+            else:
+                crs_value = crs_text.split(" - ")[0]
+            
+            cur = self.db_connection.cursor()
+            
+            # Update survey
+            cur.execute("""
+                UPDATE surveys 
+                SET plan_number = %s, owner_name = %s, survey_date = %s, 
+                    original_crs = %s, surveyor_name = %s, local_government = %s, 
+                    state = %s, notes = %s
+                WHERE survey_id = %s
+            """, (
+                self.plan_number.text().strip(),
+                self.owner_name.text().strip(),
+                self.survey_date.date().toPyDate(),
+                crs_value,
+                self.surveyor.text().strip() or None,
+                self.lga.text().strip() or None,
+                self.state.currentText(),
+                self.notes.toPlainText().strip() or None,
+                self.current_survey_id
+            ))
+            
+            self.db_connection.commit()
+            cur.close()
+            
+            # Update label
+            self.current_survey_label.setText(
+                f"📋 Current Survey: {self.plan_number.text()} (ID: {self.current_survey_id}) - UPDATED"
+            )
+            
+            QMessageBox.information(
+                self, "Success",
+                f"✅ Survey ID {self.current_survey_id} updated successfully!"
+            )
+            
+            # Refresh lists
+            self.load_recent_surveys()
+            self.refresh_documents_list()
+            
+        except psycopg2.IntegrityError:
+            self.db_connection.rollback()
+            QMessageBox.critical(
+                self, "Duplicate Plan Number",
+                f"Plan number '{self.plan_number.text()}' already exists.\n"
+                f"Please use a unique plan number."
+            )
+        except Exception as e:
+            self.db_connection.rollback()
+            QMessageBox.critical(self, "Database Error", str(e))
+
+    def clear_survey_metadata(self):
+        """Clear survey form"""
+        self.survey_id_display.clear()
+        self.plan_number.clear()
+        self.owner_name.clear()
+        self.survey_date.setDate(QDate.currentDate())
+        self.surveyor.clear()
+        self.lga.clear()
+        self.state.setCurrentIndex(0)
+        self.notes.clear()
+        self.crs_combo.setCurrentIndex(1)  # Reset to default
+        self.custom_crs.clear()
+        self.current_survey_id = None
+        self.current_survey_label.setText("📋 Current Survey: None")
+        self.update_survey_btn.setEnabled(False)
+        self.show_status("Form cleared")
 
     # ========== DOCUMENTS TAB ==========
     def setup_documents_tab(self):
@@ -1556,9 +1894,9 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
         self.coord_table.setRowCount(0)
 
     def plot_coordinates(self):
-        """Plot coordinates on map"""
+        """Plot coordinates on map - silent version with no popups"""
         if self.coord_table.rowCount() == 0:
-            QMessageBox.warning(self, "No Data", "No coordinates to plot")
+            self.show_status("No coordinates to plot")
             return
         
         crs = self.get_current_crs()
@@ -1566,42 +1904,70 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
             return
         
         points = []
+        point_data = []
+        
         for i in range(self.coord_table.rowCount()):
             try:
                 e = float(self.coord_table.item(i, 1).text())
                 n = float(self.coord_table.item(i, 2).text())
                 points.append(QgsPointXY(e, n))
+                desc = self.coord_table.item(i, 3).text() if self.coord_table.item(i, 3) else ""
+                point_data.append((e, n, desc))
             except:
                 continue
         
         if len(points) < 1:
+            self.show_status("No valid points to plot")
             return
         
-        point_layer = QgsVectorLayer(f"Point?crs={crs.authid()}", "Survey Points", "memory")
-        provider = point_layer.dataProvider()
-        provider.addAttributes([QgsField("point_id", QVariant.Int), QgsField("description", QVariant.String)])
-        point_layer.updateFields()
-        
-        features = []
-        for i, point in enumerate(points):
-            feat = QgsFeature()
-            feat.setGeometry(QgsGeometry.fromPointXY(point))
-            desc = self.coord_table.item(i, 3).text() if self.coord_table.item(i, 3) else ""
-            feat.setAttributes([i+1, desc])
-            features.append(feat)
-        
-        provider.addFeatures(features)
-        point_layer.updateExtents()
-        
-        symbol = QgsMarkerSymbol.createSimple({'name': 'circle', 'color': '#FF0000', 'size': '4'})
-        point_layer.setRenderer(QgsSingleSymbolRenderer(symbol))
-        QgsProject.instance().addMapLayer(point_layer)
-        
-        if self.iface:
-            self.iface.setActiveLayer(point_layer)
-            self.iface.zoomToActiveLayer()
-        
-        QMessageBox.information(self, "Success", f"✅ Plotted {len(points)} points")
+        try:
+            # Create point layer
+            point_layer = QgsVectorLayer(f"Point?crs={crs.authid()}", "Survey Points", "memory")
+            provider = point_layer.dataProvider()
+            provider.addAttributes([
+                QgsField("point_id", QVariant.Int), 
+                QgsField("easting", QVariant.Double),
+                QgsField("northing", QVariant.Double),
+                QgsField("description", QVariant.String)
+            ])
+            point_layer.updateFields()
+            
+            features = []
+            for i, (e, n, desc) in enumerate(point_data):
+                feat = QgsFeature()
+                feat.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(e, n)))
+                feat.setAttributes([i+1, e, n, desc])
+                features.append(feat)
+            
+            provider.addFeatures(features)
+            point_layer.updateExtents()
+            
+            # Style
+            symbol = QgsMarkerSymbol.createSimple({'name': 'circle', 'color': '#FF0000', 'size': '4'})
+            point_layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+            QgsProject.instance().addMapLayer(point_layer)
+            
+            # SAFE ZOOM - with error handling
+            if self.iface and point_layer.featureCount() > 0:
+                try:
+                    extent = point_layer.extent()
+                    if not extent.isNull():
+                        extent.scale(1.1)
+                        self.iface.mapCanvas().setExtent(extent)
+                        self.iface.mapCanvas().refresh()
+                    else:
+                        self.iface.setActiveLayer(point_layer)
+                except Exception as e:
+                    print(f"Debug - Zoom error (suppressed): {e}")
+                    try:
+                        self.iface.setActiveLayer(point_layer)
+                    except:
+                        pass
+            
+            self.show_status(f"✅ Plotted {len(points)} points")
+            
+        except Exception as e:
+            self.show_status(f"❌ Plot error: {str(e)[:50]}")
 
     # ========== TRAVERSE TAB ==========
     def setup_traverse_tab(self):
@@ -1832,6 +2198,7 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
         self.distance_input.clear()
         self.leg_desc.clear()
         self.result_text.clear()
+        self.show_status("Traverse data cleared")
 
     def calculate_traverse(self):
         """Calculate all traverse coordinates"""
@@ -1887,18 +2254,19 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
                     result += "❌ Traverse does NOT close - Error too large\n"
             
             self.result_text.setText(result)
+            self.show_status("Traverse calculated")
             
         except Exception as e:
             self.result_text.setText(f"Error calculating traverse: {str(e)}")
 
     def plot_traverse(self):
-        """Plot traverse on map"""
+        """Plot traverse on map - silent version with no popups"""
         if not self.start_easting.text() or not self.start_northing.text():
-            QMessageBox.warning(self, "No Start Point", "Please enter start point coordinates")
+            self.show_status("No start point for traverse plotting")
             return
         
         if self.traverse_table.rowCount() == 0:
-            QMessageBox.warning(self, "No Data", "No traverse legs to plot")
+            self.show_status("No traverse legs to plot")
             return
         
         crs = self.get_current_crs()
@@ -1920,6 +2288,7 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
                 n += distance * math.cos(math.radians(bearing))
                 points.append(QgsPointXY(e, n))
             
+            # Create line layer
             line_layer = QgsVectorLayer(f"LineString?crs={crs.authid()}", "Traverse Line", "memory")
             provider = line_layer.dataProvider()
             
@@ -1928,10 +2297,12 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
             provider.addFeature(feat)
             line_layer.updateExtents()
             
+            # Style
             symbol = QgsLineSymbol.createSimple({'color': '#FF0000', 'width': '0.8'})
             line_layer.setRenderer(QgsSingleSymbolRenderer(symbol))
             QgsProject.instance().addMapLayer(line_layer)
             
+            # Create point layer
             point_layer = QgsVectorLayer(f"Point?crs={crs.authid()}", "Traverse Points", "memory")
             provider = point_layer.dataProvider()
             provider.addAttributes([QgsField("point_id", QVariant.Int)])
@@ -1947,18 +2318,34 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
             provider.addFeatures(features)
             point_layer.updateExtents()
             
+            # Style
             point_symbol = QgsMarkerSymbol.createSimple({'name': 'circle', 'color': '#0000FF', 'size': '4'})
             point_layer.setRenderer(QgsSingleSymbolRenderer(point_symbol))
             QgsProject.instance().addMapLayer(point_layer)
             
+            # SAFE ZOOM - with error handling
             if self.iface:
-                self.iface.setActiveLayer(line_layer)
-                self.iface.zoomToActiveLayer()
+                try:
+                    combined_extent = line_layer.extent()
+                    combined_extent.combineExtentWith(point_layer.extent())
+                    
+                    if not combined_extent.isNull():
+                        combined_extent.scale(1.1)
+                        self.iface.mapCanvas().setExtent(combined_extent)
+                        self.iface.mapCanvas().refresh()
+                    else:
+                        self.iface.setActiveLayer(line_layer)
+                except Exception as e:
+                    print(f"Debug - Zoom error (suppressed): {e}")
+                    try:
+                        self.iface.setActiveLayer(line_layer)
+                    except:
+                        pass
             
-            QMessageBox.information(self, "Success", f"✅ Plotted traverse with {len(points)} points")
+            self.show_status(f"✅ Plotted traverse with {len(points)} points")
             
         except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
+            self.show_status(f"❌ Plot error: {str(e)[:50]}")
 
     # ========== POSTGIS TAB ==========
     def setup_postgis_tab(self):
@@ -2214,6 +2601,7 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
         
         # Resize columns
         self.preview_table.resizeColumnsToContents()
+        self.show_status(f"Loaded {len(data)} rows from {self.table_data['name']}")
 
     def on_preview_error(self, error_msg):
         """Handle preview error"""
@@ -2224,6 +2612,7 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
     def load_selected_as_layer(self):
         """Load selected table as QGIS layer (spatial only)"""
         if not hasattr(self, 'table_data') or not self.table_data['has_geometry']:
+            QMessageBox.information(self, "Info", "Selected table has no geometry column")
             return
         
         table_name = self.table_data['name']
@@ -2251,7 +2640,7 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
             )
             cur = conn.cursor()
             cur.execute("""
-                SELECT f_geometry_column 
+                SELECT f_geometry_column, type, srid
                 FROM geometry_columns 
                 WHERE f_table_name = %s
             """, (table_name,))
@@ -2260,7 +2649,7 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
             conn.close()
             
             if result:
-                geom_col = result[0]
+                geom_col, geom_type, srid = result
                 uri.setDataSource("public", table_name, geom_col)
                 
                 # Create layer
@@ -2269,12 +2658,7 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
                 
                 if layer.isValid():
                     QgsProject.instance().addMapLayer(layer)
-                    QMessageBox.information(
-                        self, "Success",
-                        f"✅ Loaded {table_name} as QGIS layer\n"
-                        f"Features: {layer.featureCount()}\n"
-                        f"Geometry: {QgsWkbTypes.displayString(layer.wkbType())}"
-                    )
+                    self.show_status(f"✅ Loaded {table_name} as QGIS layer")
                 else:
                     QMessageBox.critical(self, "Error", "Failed to load layer")
             else:
@@ -2344,6 +2728,7 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
             cur.close()
             
             QMessageBox.information(self, "Success", f"✅ Saved {self.coord_table.rowCount()} points")
+            self.show_status(f"Saved {self.coord_table.rowCount()} points to database")
             
         except Exception as e:
             self.db_connection.rollback()
@@ -2362,6 +2747,10 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
         
         if not self.start_easting.text() or not self.start_northing.text():
             QMessageBox.warning(self, "No Start Point", "Please enter start point")
+            return
+        
+        if self.traverse_table.rowCount() == 0:
+            QMessageBox.warning(self, "No Data", "No traverse legs to save")
             return
         
         crs = self.get_current_crs()
@@ -2418,140 +2807,11 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
             self.db_connection.commit()
             cur.close()
             QMessageBox.information(self, "Success", f"✅ Saved {len(points)} traverse points")
+            self.show_status(f"Saved {len(points)} traverse points to database")
             
         except Exception as e:
             self.db_connection.rollback()
             QMessageBox.critical(self, "Error", str(e))
-
-    def save_survey_metadata(self):
-        """Save new survey"""
-        if not self.db_available:
-            QMessageBox.warning(self, "No Database", "Database not connected")
-            return
-        
-        if not self.plan_number.text() or not self.owner_name.text():
-            QMessageBox.warning(self, "Validation Error", "Plan Number and Owner Name are required")
-            return
-        
-        if self.current_survey_id:
-            reply = QMessageBox.question(self, "Confirm", "Save as NEW survey?", QMessageBox.Yes | QMessageBox.No)
-            if reply == QMessageBox.No:
-                return
-        
-        try:
-            crs_text = self.crs_combo.currentText()
-            if crs_text == "Custom EPSG (specify below)":
-                crs_value = self.custom_crs.text().strip()
-                if crs_value:
-                    crs_value = f"EPSG:{crs_value}"
-                else:
-                    crs_value = None
-            else:
-                crs_value = crs_text.split(" - ")[0]
-            
-            cur = self.db_connection.cursor()
-            cur.execute("""
-                INSERT INTO surveys 
-                (plan_number, owner_name, survey_date, original_crs, 
-                 surveyor_name, local_government, state, notes)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING survey_id
-            """, (
-                self.plan_number.text().strip(),
-                self.owner_name.text().strip(),
-                self.survey_date.date().toPyDate(),
-                crs_value,
-                self.surveyor.text().strip() or None,
-                self.lga.text().strip() or None,
-                self.state.currentText(),
-                self.notes.toPlainText().strip() or None
-            ))
-            
-            survey_id = cur.fetchone()[0]
-            self.db_connection.commit()
-            cur.close()
-            
-            self.current_survey_id = survey_id
-            self.survey_id_display.setText(str(survey_id))
-            self.current_survey_label.setText(f"📋 Current Survey: {self.plan_number.text()} (ID: {survey_id})")
-            self.update_survey_btn.setEnabled(True)
-            
-            QMessageBox.information(self, "Success", f"✅ Survey saved with ID: {survey_id}")
-            self.load_recent_surveys()
-            
-        except Exception as e:
-            self.db_connection.rollback()
-            QMessageBox.critical(self, "Database Error", str(e))
-
-    def update_survey_metadata(self):
-        """Update existing survey"""
-        if not self.db_available or not self.current_survey_id:
-            return
-        
-        if not self.plan_number.text() or not self.owner_name.text():
-            QMessageBox.warning(self, "Validation Error", "Plan Number and Owner Name are required")
-            return
-        
-        reply = QMessageBox.question(self, "Confirm Update", f"Update Survey ID {self.current_survey_id}?", 
-                                    QMessageBox.Yes | QMessageBox.No)
-        if reply == QMessageBox.No:
-            return
-        
-        try:
-            crs_text = self.crs_combo.currentText()
-            if crs_text == "Custom EPSG (specify below)":
-                crs_value = self.custom_crs.text().strip()
-                if crs_value:
-                    crs_value = f"EPSG:{crs_value}"
-                else:
-                    crs_value = None
-            else:
-                crs_value = crs_text.split(" - ")[0]
-            
-            cur = self.db_connection.cursor()
-            cur.execute("""
-                UPDATE surveys 
-                SET plan_number = %s, owner_name = %s, survey_date = %s, 
-                    original_crs = %s, surveyor_name = %s, local_government = %s, 
-                    state = %s, notes = %s
-                WHERE survey_id = %s
-            """, (
-                self.plan_number.text().strip(),
-                self.owner_name.text().strip(),
-                self.survey_date.date().toPyDate(),
-                crs_value,
-                self.surveyor.text().strip() or None,
-                self.lga.text().strip() or None,
-                self.state.currentText(),
-                self.notes.toPlainText().strip() or None,
-                self.current_survey_id
-            ))
-            
-            self.db_connection.commit()
-            cur.close()
-            
-            QMessageBox.information(self, "Success", f"✅ Survey updated successfully!")
-            
-        except Exception as e:
-            self.db_connection.rollback()
-            QMessageBox.critical(self, "Database Error", str(e))
-
-    def clear_survey_metadata(self):
-        """Clear survey form"""
-        self.survey_id_display.clear()
-        self.plan_number.clear()
-        self.owner_name.clear()
-        self.survey_date.setDate(QDate.currentDate())
-        self.surveyor.clear()
-        self.lga.clear()
-        self.state.setCurrentIndex(0)
-        self.notes.clear()
-        self.crs_combo.setCurrentIndex(1)
-        self.custom_crs.clear()
-        self.current_survey_id = None
-        self.current_survey_label.setText("📋 Current Survey: None")
-        self.update_survey_btn.setEnabled(False)
-        self.refresh_documents_list()
 
     def calculate_polygon_area_from_table(self):
         """Calculate area from coordinate table"""
@@ -2581,5 +2841,6 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
         return abs(area) / 2.0
 
     def refresh_search(self):
-        """Refresh search results - placeholder for future implementation"""
-        pass
+        """Refresh search results - placeholder"""
+        if self.db_available:
+            self.load_recent_surveys()
