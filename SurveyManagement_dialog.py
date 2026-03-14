@@ -5,7 +5,7 @@
                                  A QGIS plugin
  Digital archiving for Nigerian survey records
                               -------------------
-        begin                : 2026-03-13
+        begin                : 2026-03-14
         copyright            : (C) 2026 by ASTROMAT GEO-SERVICES
         email                : ugwusochukwuma@gmail.com
  ***************************************************************************/
@@ -31,7 +31,8 @@ from qgis.PyQt.QtWidgets import (
     QFileDialog, QCheckBox, QProgressDialog, QSpinBox,
     QDoubleSpinBox, QGridLayout, QSplitter, QTreeWidget,
     QTreeWidgetItem, QProgressBar, QAbstractItemView,
-    QStatusBar, QSystemTrayIcon, QMenu
+    QStatusBar, QSystemTrayIcon, QMenu, QRadioButton,
+    QScrollArea
 )
 from qgis.PyQt.QtGui import QColor, QFont, QIcon
 
@@ -50,6 +51,7 @@ from qgis.gui import QgsMessageBar
 try:
     import psycopg2
     from psycopg2 import sql
+    from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
     PSYCOPG2_AVAILABLE = True
 except ImportError:
     PSYCOPG2_AVAILABLE = False
@@ -73,6 +75,7 @@ class TableLoaderThread(QThread):
     def run(self):
         try:
             conn = psycopg2.connect(**self.connection_params)
+            conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
             cur = conn.cursor()
             
             # Get all tables in public schema
@@ -148,6 +151,7 @@ class DataPreviewThread(QThread):
     def run(self):
         try:
             conn = psycopg2.connect(**self.connection_params)
+            conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
             cur = conn.cursor()
             
             # Get column names
@@ -516,6 +520,10 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
         self.minimize_to_tray = True
         self.tray_icon = None
         self.table_data = None
+        self.all_surveys = []  # Store all surveys for filtering
+        self.global_survey_results = []  # For global search survey results
+        self.global_point_results = []   # For global search point results
+        self.global_doc_results = []     # For global search document results
         
         # Store reference to iface
         self.iface = parent
@@ -543,9 +551,6 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
         # Make it non-modal
         self.setWindowModality(Qt.NonModal)
         
-        # Allow interaction with parent even when dialog is open
-        #self.setAttribute(Qt.WA_ShowModal, False)
-        
         # Center the dialog
         self.center_on_screen()
         
@@ -553,7 +558,7 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
         if self.layout() is not None:
             QWidget().setLayout(self.layout())
         
-        # Create main layout
+        # Create main layout (scrollable)
         self.create_main_layout()
         
         # Create status bar for silent messages
@@ -565,9 +570,9 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
         
         # Load initial data if database available
         if self.db_available:
-            self.refresh_search()
             self.ensure_document_table_exists()
             self.refresh_table_list()  # Load tables in PostgreSQL tab
+            self.load_all_surveys()
 
     def center_on_screen(self):
         """Center the dialog on the screen"""
@@ -679,6 +684,7 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
             return
         
         try:
+            self.db_connection.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
             cur = self.db_connection.cursor()
             
             # Check if table exists
@@ -707,7 +713,6 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
                         description TEXT
                     )
                 """)
-                self.db_connection.commit()
                 print("Created survey_documents table")
             
             cur.close()
@@ -716,8 +721,16 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
             print(f"Error ensuring document table: {e}")
 
     def create_main_layout(self):
-        """Create the main layout with all tabs"""
-        main_layout = QVBoxLayout()
+        """Create the main layout with all tabs in a scrollable area"""
+        # Create a scroll area for the entire dialog
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        
+        # Create main widget that will go inside scroll area
+        main_widget = QWidget()
+        main_layout = QVBoxLayout(main_widget)
         
         # Header
         header_layout = QHBoxLayout()
@@ -796,6 +809,7 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
         self.setup_coordinate_tab()
         self.setup_traverse_tab()
         self.setup_postgis_tab()
+        self.setup_global_search_tab()
         
         # Window behavior options
         float_group = QGroupBox("Window Behavior")
@@ -849,7 +863,13 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
         hint.setStyleSheet("color: #27ae60; font-weight: bold;")
         main_layout.addWidget(hint)
         
-        self.setLayout(main_layout)
+        # Set the main widget as the scroll area's widget
+        scroll.setWidget(main_widget)
+        
+        # Create a layout for the dialog and add the scroll area
+        dialog_layout = QVBoxLayout()
+        dialog_layout.addWidget(scroll)
+        self.setLayout(dialog_layout)
 
     def on_crs_changed(self, text):
         """Handle CRS selection change"""
@@ -881,53 +901,93 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
 
     # ========== SURVEY METADATA TAB ==========
     def setup_survey_tab(self):
-        """Tab for survey metadata"""
+        """Tab for survey metadata entry with searchable table for loading surveys"""
         tab = QWidget()
         layout = QVBoxLayout()
         layout.setSpacing(10)
         
-        # Search section
-        search_group = QGroupBox("🔍 SEARCH AND LOAD EXISTING SURVEY")
-        search_group.setStyleSheet("QGroupBox { font-weight: bold; color: #2980b9; }")
+        # ===== SEARCHABLE SURVEY LOADER =====
+        load_group = QGroupBox("🔍 SEARCH & LOAD EXISTING SURVEY")
+        load_group.setStyleSheet("QGroupBox { font-weight: bold; color: #2980b9; }")
+        load_layout = QVBoxLayout()
+        
+        # Search bar
         search_layout = QHBoxLayout()
-        
         self.survey_search_input = QLineEdit()
-        self.survey_search_input.setPlaceholderText("Enter Plan Number, Owner Name, or Survey ID...")
-        self.survey_search_input.setMinimumWidth(400)
-        self.survey_search_input.returnPressed.connect(self.search_surveys_for_load)
-        search_layout.addWidget(self.survey_search_input)
+        self.survey_search_input.setPlaceholderText("Type to search by Plan Number, Owner Name, Surveyor, LGA, or State...")
+        self.survey_search_input.setMinimumHeight(35)
+        self.survey_search_input.textChanged.connect(self.filter_survey_table)
+        search_layout.addWidget(self.survey_search_input, 3)
         
-        search_survey_btn = QPushButton("🔍 Search")
-        search_survey_btn.setStyleSheet("background-color: #3498db; color: white; font-weight: bold; padding: 5px;")
-        search_survey_btn.clicked.connect(self.search_surveys_for_load)
-        search_layout.addWidget(search_survey_btn)
+        refresh_btn = QPushButton("🔄 Refresh List")
+        refresh_btn.setStyleSheet("background-color: #3498db; color: white; font-weight: bold; padding: 8px;")
+        refresh_btn.clicked.connect(self.load_all_surveys)
+        search_layout.addWidget(refresh_btn, 1)
         
-        self.survey_search_results = QComboBox()
-        self.survey_search_results.setMinimumWidth(500)
-        self.survey_search_results.setPlaceholderText("Select a survey to load...")
-        search_layout.addWidget(self.survey_search_results)
+        load_layout.addLayout(search_layout)
         
-        load_survey_btn = QPushButton("📂 Load Selected")
-        load_survey_btn.setStyleSheet("background-color: #27ae60; color: white; font-weight: bold; padding: 5px;")
-        load_survey_btn.clicked.connect(self.load_selected_survey_for_edit)
-        search_layout.addWidget(load_survey_btn)
+        # Search options
+        options_layout = QHBoxLayout()
+        options_layout.addWidget(QLabel("Search in:"))
         
-        refresh_btn = QPushButton("🔄 Recent")
-        refresh_btn.setStyleSheet("background-color: #95a5a6; color: white; padding: 5px;")
-        refresh_btn.clicked.connect(lambda: self.load_recent_surveys())
-        search_layout.addWidget(refresh_btn)
+        self.search_field_combo = QComboBox()
+        self.search_field_combo.addItems([
+            "All Fields",
+            "Plan Number",
+            "Owner Name",
+            "Surveyor Name",
+            "LGA",
+            "State",
+            "Survey ID"
+        ])
+        options_layout.addWidget(self.search_field_combo)
         
-        search_layout.addStretch()
-        search_group.setLayout(search_layout)
-        layout.addWidget(search_group)
+        options_layout.addStretch()
+        options_layout.addWidget(QLabel("Show:"))
         
-        # Current survey indicator
-        self.current_survey_label = QLabel("📋 Current Survey: None")
-        self.current_survey_label.setStyleSheet("font-weight: bold; color: #2980b9; font-size: 11pt;")
-        layout.addWidget(self.current_survey_label)
+        self.limit_combo = QComboBox()
+        self.limit_combo.addItems(["50", "100", "250", "500", "1000", "All"])
+        self.limit_combo.setCurrentIndex(2)  # Default to 250
+        self.limit_combo.currentTextChanged.connect(self.load_all_surveys)
+        options_layout.addWidget(self.limit_combo)
         
-        # Form group
-        form_group = QGroupBox("2. SURVEY METADATA")
+        load_layout.addLayout(options_layout)
+        
+        # Results count
+        self.survey_count_label = QLabel("Loading surveys...")
+        self.survey_count_label.setStyleSheet("color: #7f8c8d; font-style: italic;")
+        load_layout.addWidget(self.survey_count_label)
+        
+        # Survey table
+        self.survey_table = QTableWidget()
+        self.survey_table.setColumnCount(7)
+        self.survey_table.setHorizontalHeaderLabels([
+            "ID", "Plan Number", "Owner Name", "Surveyor", "LGA", "State", "Date"
+        ])
+        self.survey_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.survey_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.survey_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.survey_table.setAlternatingRowColors(True)
+        self.survey_table.setMinimumHeight(200)
+        self.survey_table.itemDoubleClicked.connect(self.load_survey_from_table)
+        load_layout.addWidget(self.survey_table)
+        
+        # Load button
+        load_btn_layout = QHBoxLayout()
+        load_btn_layout.addStretch()
+        
+        load_selected_btn = QPushButton("📂 Load Selected Survey")
+        load_selected_btn.setStyleSheet("background-color: #27ae60; color: white; font-weight: bold; padding: 8px;")
+        load_selected_btn.clicked.connect(self.load_selected_survey_from_table)
+        load_btn_layout.addWidget(load_selected_btn)
+        
+        load_layout.addLayout(load_btn_layout)
+        
+        load_group.setLayout(load_layout)
+        layout.addWidget(load_group)
+        
+        # ===== SURVEY METADATA FORM =====
+        form_group = QGroupBox("SURVEY METADATA")
         form_group.setStyleSheet("QGroupBox { font-weight: bold; color: #27ae60; }")
         form_layout = QFormLayout()
         form_layout.setSpacing(10)
@@ -1003,87 +1063,141 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
         tab.setLayout(layout)
         self.tab_widget.addTab(tab, "📋 Survey Metadata")
 
-    # ========== SURVEY SEARCH METHODS ==========
-    def search_surveys_for_load(self):
-        """Search for surveys to load"""
-        if not self.db_available:
-            QMessageBox.warning(self, "No Database", "Database not connected")
-            return
-        
-        search_term = self.survey_search_input.text().strip()
-        if not search_term:
-            self.load_recent_surveys()
-            return
-        
-        try:
-            cur = self.db_connection.cursor()
-            cur.execute("""
-                SELECT survey_id, plan_number, owner_name, survey_date 
-                FROM surveys 
-                WHERE plan_number ILIKE %s 
-                   OR owner_name ILIKE %s 
-                   OR CAST(survey_id AS TEXT) ILIKE %s
-                ORDER BY survey_date DESC
-                LIMIT 50
-            """, (f'%{search_term}%', f'%{search_term}%', f'%{search_term}%'))
-            
-            results = cur.fetchall()
-            cur.close()
-            
-            self.survey_search_results.clear()
-            
-            if not results:
-                self.survey_search_results.addItem("No surveys found", None)
-                return
-            
-            for row in results:
-                survey_id, plan_number, owner_name, survey_date = row
-                date_str = survey_date.strftime('%Y-%m-%d') if survey_date else 'No date'
-                display_text = f"ID:{survey_id} | {plan_number} | {owner_name} | {date_str}"
-                self.survey_search_results.addItem(display_text, survey_id)
-            
-            self.show_status(f"Found {len(results)} surveys")
-            
-        except Exception as e:
-            QMessageBox.critical(self, "Database Error", str(e))
-
-    def load_recent_surveys(self):
-        """Load recent surveys into dropdown"""
+    # ========== SURVEY TABLE METHODS ==========
+    def load_all_surveys(self):
+        """Load all surveys into the table"""
         if not self.db_available:
             return
         
         try:
+            self.survey_count_label.setText("Loading surveys...")
+            QApplication.processEvents()
+            
+            self.db_connection.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
             cur = self.db_connection.cursor()
-            cur.execute("""
-                SELECT survey_id, plan_number, owner_name, survey_date 
+            
+            # Get limit
+            limit_text = self.limit_combo.currentText()
+            if limit_text == "All":
+                limit_clause = ""
+            else:
+                limit_clause = f"LIMIT {limit_text}"
+            
+            cur.execute(f"""
+                SELECT survey_id, plan_number, owner_name, surveyor_name, 
+                       local_government, state, survey_date
                 FROM surveys 
-                ORDER BY survey_date DESC
-                LIMIT 20
+                ORDER BY survey_date DESC NULLS LAST, survey_id DESC
+                {limit_clause}
             """)
             
             results = cur.fetchall()
             cur.close()
             
-            self.survey_search_results.clear()
-            self.survey_search_results.addItem("-- Recent Surveys --", None)
-            
-            for row in results:
-                survey_id, plan_number, owner_name, survey_date = row
-                date_str = survey_date.strftime('%Y-%m-%d') if survey_date else 'No date'
-                display_text = f"ID:{survey_id} | {plan_number} | {owner_name} | {date_str}"
-                self.survey_search_results.addItem(display_text, survey_id)
+            self.all_surveys = results  # Store for filtering
+            self.display_survey_table(results)
+            self.survey_count_label.setText(f"📊 Found {len(results)} surveys")
             
         except Exception as e:
-            QMessageBox.critical(self, "Database Error", str(e))
+            print(f"Error loading surveys: {e}")
+            self.survey_count_label.setText(f"❌ Error loading surveys")
 
-    def load_selected_survey_for_edit(self):
-        """Load selected survey for editing"""
-        survey_id = self.survey_search_results.currentData()
-        if not survey_id:
-            QMessageBox.warning(self, "No Selection", "Please select a survey to load")
+    def display_survey_table(self, surveys):
+        """Display surveys in the table"""
+        self.survey_table.setRowCount(len(surveys))
+        
+        for row, survey in enumerate(surveys):
+            survey_id, plan_number, owner_name, surveyor_name, lga, state, survey_date = survey
+            
+            self.survey_table.setItem(row, 0, QTableWidgetItem(str(survey_id)))
+            self.survey_table.setItem(row, 1, QTableWidgetItem(plan_number or ""))
+            self.survey_table.setItem(row, 2, QTableWidgetItem(owner_name or ""))
+            self.survey_table.setItem(row, 3, QTableWidgetItem(surveyor_name or ""))
+            self.survey_table.setItem(row, 4, QTableWidgetItem(lga or ""))
+            self.survey_table.setItem(row, 5, QTableWidgetItem(state or ""))
+            
+            date_str = survey_date.strftime("%Y-%m-%d") if survey_date else ""
+            self.survey_table.setItem(row, 6, QTableWidgetItem(date_str))
+            
+            # Store survey_id in first column for easy access
+            self.survey_table.item(row, 0).setData(Qt.UserRole, survey_id)
+
+    def filter_survey_table(self):
+        """Filter the survey table based on search input"""
+        if not hasattr(self, 'all_surveys') or not self.all_surveys:
             return
         
-        self.load_survey_by_id(survey_id)
+        search_text = self.survey_search_input.text().strip().lower()
+        search_field = self.search_field_combo.currentText()
+        
+        if not search_text:
+            # Show all
+            self.display_survey_table(self.all_surveys)
+            self.survey_count_label.setText(f"📊 Found {len(self.all_surveys)} surveys")
+            return
+        
+        filtered = []
+        for survey in self.all_surveys:
+            survey_id, plan_number, owner_name, surveyor_name, lga, state, survey_date = survey
+            
+            # Convert to strings for searching
+            id_str = str(survey_id)
+            plan_str = (plan_number or "").lower()
+            owner_str = (owner_name or "").lower()
+            surveyor_str = (surveyor_name or "").lower()
+            lga_str = (lga or "").lower()
+            state_str = (state or "").lower()
+            
+            # Search based on selected field
+            if search_field == "All Fields":
+                if (search_text in id_str or
+                    search_text in plan_str or
+                    search_text in owner_str or
+                    search_text in surveyor_str or
+                    search_text in lga_str or
+                    search_text in state_str):
+                    filtered.append(survey)
+            elif search_field == "Plan Number":
+                if search_text in plan_str:
+                    filtered.append(survey)
+            elif search_field == "Owner Name":
+                if search_text in owner_str:
+                    filtered.append(survey)
+            elif search_field == "Surveyor Name":
+                if search_text in surveyor_str:
+                    filtered.append(survey)
+            elif search_field == "LGA":
+                if search_text in lga_str:
+                    filtered.append(survey)
+            elif search_field == "State":
+                if search_text in state_str:
+                    filtered.append(survey)
+            elif search_field == "Survey ID":
+                if search_text in id_str:
+                    filtered.append(survey)
+        
+        self.display_survey_table(filtered)
+        self.survey_count_label.setText(f"📊 Found {len(filtered)} matching surveys")
+
+    def load_survey_from_table(self, item):
+        """Load survey when double-clicking a row"""
+        row = item.row()
+        self.load_survey_from_row(row)
+
+    def load_selected_survey_from_table(self):
+        """Load the currently selected survey from the table"""
+        current_row = self.survey_table.currentRow()
+        if current_row >= 0:
+            self.load_survey_from_row(current_row)
+        else:
+            QMessageBox.warning(self, "No Selection", "Please select a survey to load")
+
+    def load_survey_from_row(self, row):
+        """Load survey from the specified row"""
+        survey_id_item = self.survey_table.item(row, 0)
+        if survey_id_item:
+            survey_id = int(survey_id_item.text())
+            self.load_survey_by_id(survey_id)
 
     def load_survey_by_id(self, survey_id):
         """Load survey by ID into form"""
@@ -1091,6 +1205,7 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
             return
         
         try:
+            self.db_connection.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
             cur = self.db_connection.cursor()
             cur.execute("""
                 SELECT survey_id, plan_number, owner_name, survey_date, 
@@ -1143,7 +1258,7 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
             
             self.current_survey_id = sid
             self.current_survey_label.setText(
-                f"📋 Current Survey: {plan_number} (ID: {sid}) - READY FOR EDITING"
+                f"📋 Current Survey: {plan_number} (ID: {sid})"
             )
             
             self.update_survey_btn.setEnabled(True)
@@ -1152,208 +1267,595 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
             
             self.show_status(f"Loaded survey: {plan_number}")
             
+            # Switch to form tab
+            self.tab_widget.setCurrentIndex(0)
+            
         except Exception as e:
-            QMessageBox.critical(self, "Database Error", str(e))
-
-    # ========== SURVEY SAVE METHODS ==========
-    def save_survey_metadata(self):
-        """Save new survey to database"""
-        if not self.db_available:
-            QMessageBox.warning(self, "No Database", "Database not connected")
-            return
-        
-        if not self.plan_number.text() or not self.owner_name.text():
-            QMessageBox.warning(self, "Validation Error", "Plan Number and Owner Name are required")
-            return
-        
-        # Check if we're overwriting
-        if self.current_survey_id:
-            reply = QMessageBox.question(
-                self, "Confirm Save",
-                f"A survey is currently loaded (ID: {self.current_survey_id}).\n"
-                f"Do you want to SAVE AS NEW SURVEY?\n\n"
-                f"Click 'Yes' to create a new survey.\n"
-                f"Click 'No' to cancel.",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
-            )
-            if reply == QMessageBox.No:
-                return
-        
-        try:
-            # Get CRS value
-            crs_text = self.crs_combo.currentText()
-            if crs_text == "Custom EPSG (specify below)":
-                crs_value = self.custom_crs.text().strip()
-                if crs_value:
-                    crs_value = f"EPSG:{crs_value}"
-                else:
-                    crs_value = None
-            else:
-                crs_value = crs_text.split(" - ")[0]
-            
-            cur = self.db_connection.cursor()
-            
-            # Insert new survey
-            cur.execute("""
-                INSERT INTO surveys 
-                (plan_number, owner_name, survey_date, original_crs, 
-                 surveyor_name, local_government, state, notes)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING survey_id
-            """, (
-                self.plan_number.text().strip(),
-                self.owner_name.text().strip(),
-                self.survey_date.date().toPyDate(),
-                crs_value,
-                self.surveyor.text().strip() or None,
-                self.lga.text().strip() or None,
-                self.state.currentText(),
-                self.notes.toPlainText().strip() or None
-            ))
-            
-            survey_id = cur.fetchone()[0]
-            self.db_connection.commit()
-            cur.close()
-            
-            # Update current survey
-            self.current_survey_id = survey_id
-            self.survey_id_display.setText(str(survey_id))
-            self.current_survey_label.setText(
-                f"📋 Current Survey: {self.plan_number.text()} (ID: {survey_id})"
-            )
-            self.update_survey_btn.setEnabled(True)
-            
-            # Success message
-            QMessageBox.information(
-                self, "Success",
-                f"✅ New survey saved successfully!\n\nSurvey ID: {survey_id}"
-            )
-            
-            # Refresh lists
-            self.load_recent_surveys()
-            self.refresh_documents_list()
-            
-        except psycopg2.IntegrityError:
-            self.db_connection.rollback()
-            QMessageBox.critical(
-                self, "Duplicate Plan Number",
-                f"Plan number '{self.plan_number.text()}' already exists.\n"
-                f"Please use a unique plan number."
-            )
-        except Exception as e:
+            print(f"Error loading survey: {e}")
             self.db_connection.rollback()
             QMessageBox.critical(self, "Database Error", str(e))
 
-    def update_survey_metadata(self):
-        """Update existing survey in database"""
-        if not self.db_available:
-            QMessageBox.warning(self, "No Database", "Database not connected")
-            return
+    # ========== GLOBAL SEARCH TAB ==========
+    def setup_global_search_tab(self):
+        """Tab for searching across ALL database tables"""
+        tab = QWidget()
+        layout = QVBoxLayout()
+        layout.setSpacing(10)
         
-        if not self.current_survey_id:
-            QMessageBox.warning(
-                self, "No Survey",
-                "No survey is currently loaded for editing.\n"
-                "Please search and load a survey first."
-            )
-            return
+        # Header
+        header = QLabel("🔍 GLOBAL DATABASE SEARCH")
+        header.setStyleSheet("font-size: 14pt; font-weight: bold; color: #9b59b6;")
+        layout.addWidget(header)
         
-        if not self.plan_number.text() or not self.owner_name.text():
-            QMessageBox.warning(self, "Validation Error", "Plan Number and Owner Name are required")
-            return
-        
-        # Confirm update
-        reply = QMessageBox.question(
-            self, "Confirm Update",
-            f"Are you sure you want to UPDATE Survey ID {self.current_survey_id}?\n\n"
-            f"Plan: {self.plan_number.text()}\n"
-            f"Owner: {self.owner_name.text()}\n\n"
-            f"This will overwrite the existing record.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
+        # Description
+        desc = QLabel(
+            "Search across ALL tables in the database:\n"
+            "• Survey metadata (plan numbers, owners, surveyors)\n"
+            "• Point descriptions and coordinates\n"
+            "• Boundary information\n"
+            "• Document names and descriptions\n"
+            "• Traverse leg descriptions"
         )
+        desc.setWordWrap(True)
+        desc.setStyleSheet("background-color: #ecf0f1; padding: 10px; border-radius: 5px;")
+        layout.addWidget(desc)
         
-        if reply == QMessageBox.No:
+        # Search input
+        search_layout = QHBoxLayout()
+        self.global_search_input = QLineEdit()
+        self.global_search_input.setPlaceholderText("Enter search term (e.g., 'Boundary', 'Beacon', 'Okonkwo')...")
+        self.global_search_input.setMinimumHeight(35)
+        self.global_search_input.returnPressed.connect(self.perform_global_search)
+        search_layout.addWidget(self.global_search_input, 3)
+        
+        search_btn = QPushButton("🔍 Search All Tables")
+        search_btn.setMinimumWidth(150)
+        search_btn.setStyleSheet("background-color: #9b59b6; color: white; font-weight: bold; padding: 8px;")
+        search_btn.clicked.connect(self.perform_global_search)
+        search_layout.addWidget(search_btn, 1)
+        
+        layout.addLayout(search_layout)
+        
+        # Search options
+        options_group = QGroupBox("Search Options")
+        options_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        options_layout = QHBoxLayout()
+        
+        self.search_surveys_cb = QCheckBox("Surveys")
+        self.search_surveys_cb.setChecked(True)
+        options_layout.addWidget(self.search_surveys_cb)
+        
+        self.search_points_cb = QCheckBox("Points")
+        self.search_points_cb.setChecked(True)
+        options_layout.addWidget(self.search_points_cb)
+        
+        self.search_boundaries_cb = QCheckBox("Boundaries")
+        self.search_boundaries_cb.setChecked(True)
+        options_layout.addWidget(self.search_boundaries_cb)
+        
+        self.search_documents_cb = QCheckBox("Documents")
+        self.search_documents_cb.setChecked(True)
+        options_layout.addWidget(self.search_documents_cb)
+        
+        self.search_traverses_cb = QCheckBox("Traverses")
+        self.search_traverses_cb.setChecked(True)
+        options_layout.addWidget(self.search_traverses_cb)
+        
+        options_layout.addStretch()
+        options_group.setLayout(options_layout)
+        layout.addWidget(options_group)
+        
+        # Match type
+        match_group = QGroupBox("Match Type")
+        match_layout = QHBoxLayout()
+        
+        self.match_exact = QRadioButton("Exact match")
+        self.match_exact.setChecked(False)
+        match_layout.addWidget(self.match_exact)
+        
+        self.match_contains = QRadioButton("Contains")
+        self.match_contains.setChecked(True)
+        match_layout.addWidget(self.match_contains)
+        
+        self.match_start = QRadioButton("Starts with")
+        match_layout.addWidget(self.match_start)
+        
+        self.match_end = QRadioButton("Ends with")
+        match_layout.addWidget(self.match_end)
+        
+        match_layout.addStretch()
+        match_group.setLayout(match_layout)
+        layout.addWidget(match_group)
+        
+        # Results tabs
+        self.global_results_tabs = QTabWidget()
+        
+        # Tab 1: Combined Results
+        combined_tab = QWidget()
+        combined_layout = QVBoxLayout()
+        
+        self.combined_results_table = QTableWidget()
+        self.combined_results_table.setColumnCount(6)
+        self.combined_results_table.setHorizontalHeaderLabels([
+            "Table", "ID", "Field", "Value", "Linked Survey", "Actions"
+        ])
+        self.combined_results_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.combined_results_table.setAlternatingRowColors(True)
+        self.combined_results_table.setSelectionBehavior(QTableWidget.SelectRows)
+        combined_layout.addWidget(self.combined_results_table)
+        
+        combined_tab.setLayout(combined_layout)
+        self.global_results_tabs.addTab(combined_tab, "📊 All Results")
+        
+        # Tab 2: Surveys Only
+        surveys_tab = QWidget()
+        surveys_layout = QVBoxLayout()
+        
+        self.surveys_results_table = QTableWidget()
+        self.surveys_results_table.setColumnCount(8)
+        self.surveys_results_table.setHorizontalHeaderLabels([
+            "ID", "Plan #", "Owner", "Surveyor", "LGA", "State", "Date", "Actions"
+        ])
+        self.surveys_results_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        surveys_layout.addWidget(self.surveys_results_table)
+        
+        surveys_tab.setLayout(surveys_layout)
+        self.global_results_tabs.addTab(surveys_tab, "📋 Surveys")
+        
+        # Tab 3: Points Only
+        points_tab = QWidget()
+        points_layout = QVBoxLayout()
+        
+        self.points_results_table = QTableWidget()
+        self.points_results_table.setColumnCount(7)
+        self.points_results_table.setHorizontalHeaderLabels([
+            "Point ID", "Survey ID", "Point #", "Description", "Coordinates", "Raw CRS", "Actions"
+        ])
+        self.points_results_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        points_layout.addWidget(self.points_results_table)
+        
+        points_tab.setLayout(points_layout)
+        self.global_results_tabs.addTab(points_tab, "📍 Points")
+        
+        # Tab 4: Documents Only
+        docs_tab = QWidget()
+        docs_layout = QVBoxLayout()
+        
+        self.docs_results_table = QTableWidget()
+        self.docs_results_table.setColumnCount(6)
+        self.docs_results_table.setHorizontalHeaderLabels([
+            "Doc ID", "Survey ID", "File Name", "Description", "Size (KB)", "Actions"
+        ])
+        self.docs_results_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        docs_layout.addWidget(self.docs_results_table)
+        
+        docs_tab.setLayout(docs_layout)
+        self.global_results_tabs.addTab(docs_tab, "📄 Documents")
+        
+        layout.addWidget(self.global_results_tabs)
+        
+        # Status bar
+        self.global_search_status = QLabel("Ready to search")
+        self.global_search_status.setStyleSheet("color: #7f8c8d; font-style: italic;")
+        layout.addWidget(self.global_search_status)
+        
+        tab.setLayout(layout)
+        self.tab_widget.addTab(tab, "🔍 Global Search")
+
+    # ========== GLOBAL SEARCH METHODS ==========
+    def perform_global_search(self):
+        """Search across ALL database tables"""
+        if not self.db_available:
+            QMessageBox.warning(self, "No Database", "Database not connected")
             return
         
+        search_term = self.global_search_input.text().strip()
+        
+        if not search_term:
+            QMessageBox.warning(self, "Empty Search", "Please enter a search term")
+            return
+        
+        self.global_search_status.setText(f"🔍 Searching for '{search_term}'...")
+        QApplication.processEvents()
+        
         try:
-            # Get CRS value
-            crs_text = self.crs_combo.currentText()
-            if crs_text == "Custom EPSG (specify below)":
-                crs_value = self.custom_crs.text().strip()
-                if crs_value:
-                    crs_value = f"EPSG:{crs_value}"
-                else:
-                    crs_value = None
+            # Build search pattern based on match type
+            if self.match_exact.isChecked():
+                pattern = search_term
+            elif self.match_contains.isChecked():
+                pattern = f"%{search_term}%"
+            elif self.match_start.isChecked():
+                pattern = f"{search_term}%"
+            elif self.match_end.isChecked():
+                pattern = f"%{search_term}"
             else:
-                crs_value = crs_text.split(" - ")[0]
+                pattern = f"%{search_term}%"
             
+            # Use autocommit to avoid transaction issues
+            self.db_connection.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
             cur = self.db_connection.cursor()
+            all_results = []
             
-            # Update survey
-            cur.execute("""
-                UPDATE surveys 
-                SET plan_number = %s, owner_name = %s, survey_date = %s, 
-                    original_crs = %s, surveyor_name = %s, local_government = %s, 
-                    state = %s, notes = %s
-                WHERE survey_id = %s
-            """, (
-                self.plan_number.text().strip(),
-                self.owner_name.text().strip(),
-                self.survey_date.date().toPyDate(),
-                crs_value,
-                self.surveyor.text().strip() or None,
-                self.lga.text().strip() or None,
-                self.state.currentText(),
-                self.notes.toPlainText().strip() or None,
-                self.current_survey_id
-            ))
+            # ===== SEARCH SURVEYS TABLE =====
+            if self.search_surveys_cb.isChecked():
+                survey_query = """
+                    SELECT 'surveys' as table_name, survey_id, 
+                           'plan_number' as field, plan_number as value,
+                           survey_id as linked_id
+                    FROM surveys WHERE plan_number ILIKE %s
+                    UNION ALL
+                    SELECT 'surveys', survey_id, 'owner_name', owner_name, survey_id
+                    FROM surveys WHERE owner_name ILIKE %s
+                    UNION ALL
+                    SELECT 'surveys', survey_id, 'surveyor_name', surveyor_name, survey_id
+                    FROM surveys WHERE surveyor_name ILIKE %s
+                    UNION ALL
+                    SELECT 'surveys', survey_id, 'local_government', local_government, survey_id
+                    FROM surveys WHERE local_government ILIKE %s
+                    UNION ALL
+                    SELECT 'surveys', survey_id, 'state', state, survey_id
+                    FROM surveys WHERE state ILIKE %s
+                    UNION ALL
+                    SELECT 'surveys', survey_id, 'notes', notes, survey_id
+                    FROM surveys WHERE notes ILIKE %s
+                """
+                cur.execute(survey_query, [pattern] * 6)
+                survey_results = cur.fetchall()
+                all_results.extend(survey_results)
+                
+                # Also get full survey records for dedicated tab
+                cur.execute("""
+                    SELECT survey_id, plan_number, owner_name, surveyor_name, 
+                           local_government, state, survey_date
+                    FROM surveys 
+                    WHERE plan_number ILIKE %s 
+                       OR owner_name ILIKE %s 
+                       OR surveyor_name ILIKE %s
+                       OR local_government ILIKE %s
+                       OR state ILIKE %s
+                       OR notes ILIKE %s
+                    ORDER BY survey_date DESC
+                    LIMIT 200
+                """, [pattern] * 6)
+                self.global_survey_results = cur.fetchall()
+            else:
+                self.global_survey_results = []
             
-            self.db_connection.commit()
+            # ===== SEARCH POINTS TABLE =====
+            if self.search_points_cb.isChecked():
+                points_query = """
+                    SELECT 'points' as table_name, point_id, 
+                           'description' as field, description as value,
+                           survey_id as linked_id
+                    FROM survey_points WHERE description ILIKE %s
+                    UNION ALL
+                    SELECT 'points', point_id, 'notes', notes, survey_id
+                    FROM survey_points WHERE notes ILIKE %s
+                    UNION ALL
+                    SELECT 'points', point_id, 'raw_coordinates', raw_coordinates, survey_id
+                    FROM survey_points WHERE raw_coordinates ILIKE %s
+                """
+                cur.execute(points_query, [pattern] * 3)
+                point_results = cur.fetchall()
+                all_results.extend(point_results)
+                
+                # Get full point records for dedicated tab
+                cur.execute("""
+                    SELECT point_id, survey_id, point_number, description, 
+                           ST_AsText(geometry) as wkt, raw_crs
+                    FROM survey_points 
+                    WHERE description ILIKE %s 
+                       OR notes ILIKE %s
+                       OR raw_coordinates ILIKE %s
+                    ORDER BY point_id DESC
+                    LIMIT 200
+                """, [pattern] * 3)
+                self.global_point_results = cur.fetchall()
+            else:
+                self.global_point_results = []
+            
+            # ===== SEARCH BOUNDARIES TABLE =====
+            if self.search_boundaries_cb.isChecked():
+                boundaries_query = """
+                    SELECT 'boundaries' as table_name, boundary_id, 
+                           'verified' as field, CAST(verified AS TEXT) as value,
+                           survey_id as linked_id
+                    FROM survey_boundaries 
+                    WHERE CAST(verified AS TEXT) ILIKE %s
+                """
+                cur.execute(boundaries_query, [pattern])
+                boundary_results = cur.fetchall()
+                all_results.extend(boundary_results)
+            
+            # ===== SEARCH DOCUMENTS TABLE =====
+            if self.search_documents_cb.isChecked():
+                docs_query = """
+                    SELECT 'documents' as table_name, document_id, 
+                           'file_name' as field, file_name as value,
+                           survey_id as linked_id
+                    FROM survey_documents WHERE file_name ILIKE %s
+                    UNION ALL
+                    SELECT 'documents', document_id, 'description', description, survey_id
+                    FROM survey_documents WHERE description ILIKE %s
+                """
+                cur.execute(docs_query, [pattern] * 2)
+                doc_results = cur.fetchall()
+                all_results.extend(doc_results)
+                
+                # Get full document records for dedicated tab
+                cur.execute("""
+                    SELECT document_id, survey_id, file_name, description, 
+                           file_size, is_primary
+                    FROM survey_documents 
+                    WHERE file_name ILIKE %s 
+                       OR description ILIKE %s
+                    ORDER BY uploaded_at DESC
+                    LIMIT 200
+                """, [pattern] * 2)
+                self.global_doc_results = cur.fetchall()
+            else:
+                self.global_doc_results = []
+            
+            # ===== SEARCH TRAVERSES TABLE =====
+            if self.search_traverses_cb.isChecked():
+                traverses_query = """
+                    SELECT 'traverses' as table_name, traverse_id, 
+                           'traverse_name' as field, traverse_name as value,
+                           survey_id as linked_id
+                    FROM survey_traverses WHERE traverse_name ILIKE %s
+                """
+                cur.execute(traverses_query, [pattern])
+                traverse_results = cur.fetchall()
+                all_results.extend(traverse_results)
+            
             cur.close()
             
-            # Update label
-            self.current_survey_label.setText(
-                f"📋 Current Survey: {self.plan_number.text()} (ID: {self.current_survey_id}) - UPDATED"
-            )
+            # Display results in all tabs
+            self.display_global_results(all_results)
+            self.display_survey_results()
+            self.display_point_results()
+            self.display_document_results()
             
-            QMessageBox.information(
-                self, "Success",
-                f"✅ Survey ID {self.current_survey_id} updated successfully!"
-            )
+            total = len(all_results)
+            self.global_search_status.setText(f"✅ Found {total} matches across all tables")
             
-            # Refresh lists
-            self.load_recent_surveys()
-            self.refresh_documents_list()
-            
-        except psycopg2.IntegrityError:
-            self.db_connection.rollback()
-            QMessageBox.critical(
-                self, "Duplicate Plan Number",
-                f"Plan number '{self.plan_number.text()}' already exists.\n"
-                f"Please use a unique plan number."
-            )
         except Exception as e:
+            self.global_search_status.setText(f"❌ Search failed: {str(e)}")
+            print(f"Search error: {e}")
             self.db_connection.rollback()
-            QMessageBox.critical(self, "Database Error", str(e))
 
-    def clear_survey_metadata(self):
-        """Clear survey form"""
-        self.survey_id_display.clear()
-        self.plan_number.clear()
-        self.owner_name.clear()
-        self.survey_date.setDate(QDate.currentDate())
-        self.surveyor.clear()
-        self.lga.clear()
-        self.state.setCurrentIndex(0)
-        self.notes.clear()
-        self.crs_combo.setCurrentIndex(1)  # Reset to default
-        self.custom_crs.clear()
-        self.current_survey_id = None
-        self.current_survey_label.setText("📋 Current Survey: None")
-        self.update_survey_btn.setEnabled(False)
-        self.show_status("Form cleared")
+    def display_global_results(self, results):
+        """Display combined search results"""
+        self.combined_results_table.setRowCount(len(results))
+        
+        for row, result in enumerate(results):
+            table_name, item_id, field, value, linked_id = result
+            
+            # Table name with icon
+            table_icon = {
+                'surveys': '📋',
+                'points': '📍',
+                'boundaries': '🗺️',
+                'documents': '📄',
+                'traverses': '📐'
+            }.get(table_name, '📁')
+            
+            self.combined_results_table.setItem(row, 0, QTableWidgetItem(f"{table_icon} {table_name}"))
+            self.combined_results_table.setItem(row, 1, QTableWidgetItem(str(item_id)))
+            self.combined_results_table.setItem(row, 2, QTableWidgetItem(field))
+            self.combined_results_table.setItem(row, 3, QTableWidgetItem(str(value)[:100]))
+            self.combined_results_table.setItem(row, 4, QTableWidgetItem(str(linked_id) if linked_id else ""))
+            
+            # Actions
+            action_widget = QWidget()
+            action_layout = QHBoxLayout()
+            action_layout.setContentsMargins(2, 2, 2, 2)
+            
+            if table_name == 'surveys':
+                view_btn = QPushButton("👁️ View")
+                view_btn.setMaximumWidth(60)
+                view_btn.setStyleSheet("background-color: #27ae60; color: white;")
+                view_btn.clicked.connect(lambda checked, sid=linked_id: self.load_survey_by_id(sid))
+                action_layout.addWidget(view_btn)
+            elif table_name == 'points':
+                view_btn = QPushButton("📍 Show")
+                view_btn.setMaximumWidth(60)
+                view_btn.setStyleSheet("background-color: #3498db; color: white;")
+                view_btn.clicked.connect(lambda checked, pid=item_id: self.show_point_on_map(pid))
+                action_layout.addWidget(view_btn)
+                
+                survey_btn = QPushButton("📋 Survey")
+                survey_btn.setMaximumWidth(60)
+                survey_btn.setStyleSheet("background-color: #f39c12; color: white;")
+                survey_btn.clicked.connect(lambda checked, sid=linked_id: self.load_survey_by_id(sid))
+                action_layout.addWidget(survey_btn)
+            elif table_name == 'documents':
+                view_btn = QPushButton("📄 Open")
+                view_btn.setMaximumWidth(60)
+                view_btn.setStyleSheet("background-color: #e67e22; color: white;")
+                view_btn.clicked.connect(lambda checked, did=item_id: self.open_document_by_id(did))
+                action_layout.addWidget(view_btn)
+            
+            action_widget.setLayout(action_layout)
+            self.combined_results_table.setCellWidget(row, 5, action_widget)
+
+    def display_survey_results(self):
+        """Display survey search results in dedicated tab"""
+        self.surveys_results_table.setRowCount(len(self.global_survey_results))
+        
+        for row, result in enumerate(self.global_survey_results):
+            survey_id, plan_number, owner_name, surveyor_name, lga, state, survey_date = result
+            
+            self.surveys_results_table.setItem(row, 0, QTableWidgetItem(str(survey_id)))
+            self.surveys_results_table.setItem(row, 1, QTableWidgetItem(plan_number or ""))
+            self.surveys_results_table.setItem(row, 2, QTableWidgetItem(owner_name or ""))
+            self.surveys_results_table.setItem(row, 3, QTableWidgetItem(surveyor_name or ""))
+            self.surveys_results_table.setItem(row, 4, QTableWidgetItem(lga or ""))
+            self.surveys_results_table.setItem(row, 5, QTableWidgetItem(state or ""))
+            
+            date_str = survey_date.strftime("%Y-%m-%d") if survey_date else ""
+            self.surveys_results_table.setItem(row, 6, QTableWidgetItem(date_str))
+            
+            # Actions
+            action_widget = QWidget()
+            action_layout = QHBoxLayout()
+            action_layout.setContentsMargins(2, 2, 2, 2)
+            
+            view_btn = QPushButton("👁️ Load")
+            view_btn.setMaximumWidth(60)
+            view_btn.setStyleSheet("background-color: #27ae60; color: white;")
+            view_btn.clicked.connect(lambda checked, sid=survey_id: self.load_survey_by_id(sid))
+            action_layout.addWidget(view_btn)
+            
+            docs_btn = QPushButton("📄 Docs")
+            docs_btn.setMaximumWidth(60)
+            docs_btn.setStyleSheet("background-color: #3498db; color: white;")
+            docs_btn.clicked.connect(lambda checked, sid=survey_id: self.show_survey_docs(sid))
+            action_layout.addWidget(docs_btn)
+            
+            action_widget.setLayout(action_layout)
+            self.surveys_results_table.setCellWidget(row, 7, action_widget)
+
+    def display_point_results(self):
+        """Display point search results in dedicated tab"""
+        self.points_results_table.setRowCount(len(self.global_point_results))
+        
+        for row, result in enumerate(self.global_point_results):
+            point_id, survey_id, point_number, description, wkt, raw_crs = result
+            
+            self.points_results_table.setItem(row, 0, QTableWidgetItem(str(point_id)))
+            self.points_results_table.setItem(row, 1, QTableWidgetItem(str(survey_id)))
+            self.points_results_table.setItem(row, 2, QTableWidgetItem(str(point_number) if point_number else ""))
+            self.points_results_table.setItem(row, 3, QTableWidgetItem(description or ""))
+            self.points_results_table.setItem(row, 4, QTableWidgetItem(wkt[:50] + "..." if wkt else ""))
+            self.points_results_table.setItem(row, 5, QTableWidgetItem(raw_crs or ""))
+            
+            # Actions
+            action_widget = QWidget()
+            action_layout = QHBoxLayout()
+            action_layout.setContentsMargins(2, 2, 2, 2)
+            
+            show_btn = QPushButton("📍 Show")
+            show_btn.setMaximumWidth(60)
+            show_btn.setStyleSheet("background-color: #27ae60; color: white;")
+            show_btn.clicked.connect(lambda checked, pid=point_id: self.show_point_on_map(pid))
+            action_layout.addWidget(show_btn)
+            
+            survey_btn = QPushButton("📋 Survey")
+            survey_btn.setMaximumWidth(60)
+            survey_btn.setStyleSheet("background-color: #3498db; color: white;")
+            survey_btn.clicked.connect(lambda checked, sid=survey_id: self.load_survey_by_id(sid))
+            action_layout.addWidget(survey_btn)
+            
+            action_widget.setLayout(action_layout)
+            self.points_results_table.setCellWidget(row, 6, action_widget)
+
+    def display_document_results(self):
+        """Display document search results in dedicated tab"""
+        self.docs_results_table.setRowCount(len(self.global_doc_results))
+        
+        for row, result in enumerate(self.global_doc_results):
+            doc_id, survey_id, file_name, description, file_size, is_primary = result
+            
+            self.docs_results_table.setItem(row, 0, QTableWidgetItem(str(doc_id)))
+            self.docs_results_table.setItem(row, 1, QTableWidgetItem(str(survey_id)))
+            self.docs_results_table.setItem(row, 2, QTableWidgetItem(file_name or ""))
+            self.docs_results_table.setItem(row, 3, QTableWidgetItem(description or ""))
+            
+            size_kb = file_size / 1024 if file_size else 0
+            self.docs_results_table.setItem(row, 4, QTableWidgetItem(f"{size_kb:.1f}"))
+            
+            # Actions
+            action_widget = QWidget()
+            action_layout = QHBoxLayout()
+            action_layout.setContentsMargins(2, 2, 2, 2)
+            
+            open_btn = QPushButton("📄 Open")
+            open_btn.setMaximumWidth(60)
+            open_btn.setStyleSheet("background-color: #27ae60; color: white;")
+            open_btn.clicked.connect(lambda checked, did=doc_id: self.open_document_by_id(did))
+            action_layout.addWidget(open_btn)
+            
+            survey_btn = QPushButton("📋 Survey")
+            survey_btn.setMaximumWidth(60)
+            survey_btn.setStyleSheet("background-color: #3498db; color: white;")
+            survey_btn.clicked.connect(lambda checked, sid=survey_id: self.load_survey_by_id(sid))
+            action_layout.addWidget(survey_btn)
+            
+            action_widget.setLayout(action_layout)
+            self.docs_results_table.setCellWidget(row, 5, action_widget)
+
+    def show_point_on_map(self, point_id):
+        """Show a specific point on the QGIS map"""
+        try:
+            self.db_connection.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+            cur = self.db_connection.cursor()
+            cur.execute("""
+                SELECT ST_AsText(geometry), survey_id, description 
+                FROM survey_points WHERE point_id = %s
+            """, (point_id,))
+            result = cur.fetchone()
+            cur.close()
+            
+            if result and result[0]:
+                wkt, survey_id, description = result
+                
+                # Create temporary layer
+                from qgis.core import QgsVectorLayer, QgsFeature, QgsGeometry, QgsProject
+                
+                layer = QgsVectorLayer("Point?crs=EPSG:26332", f"Point {point_id}", "memory")
+                provider = layer.dataProvider()
+                
+                feat = QgsFeature()
+                feat.setGeometry(QgsGeometry.fromWkt(wkt))
+                provider.addFeature(feat)
+                
+                layer.updateExtents()
+                QgsProject.instance().addMapLayer(layer)
+                
+                # Zoom to point
+                if self.iface:
+                    self.iface.setActiveLayer(layer)
+                    self.iface.zoomToActiveLayer()
+                
+                QMessageBox.information(
+                    self, "Point Found",
+                    f"📍 Point {point_id} added to map\n"
+                    f"Description: {description}\n"
+                    f"Survey ID: {survey_id}"
+                )
+        except Exception as e:
+            print(f"Error showing point: {e}")
+            QMessageBox.critical(self, "Error", f"Could not show point: {str(e)}")
+
+    def open_document_by_id(self, document_id):
+        """Open a document by its ID"""
+        try:
+            self.db_connection.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+            cur = self.db_connection.cursor()
+            cur.execute("SELECT file_path, file_name FROM survey_documents WHERE document_id = %s", (document_id,))
+            result = cur.fetchone()
+            cur.close()
+            
+            if result:
+                file_path, file_name = result
+                if os.path.exists(file_path):
+                    self.open_file(file_path)
+                else:
+                    QMessageBox.warning(
+                        self, "File Not Found",
+                        f"Cannot find file:\n{file_path}\n\n"
+                        f"Document: {file_name}\n"
+                        f"ID: {document_id}"
+                    )
+        except Exception as e:
+            print(f"Error opening document: {e}")
+            QMessageBox.critical(self, "Error", str(e))
+
+    def show_survey_docs(self, survey_id):
+        """Show documents for a survey"""
+        self.load_survey_by_id(survey_id)
+        self.tab_widget.setCurrentIndex(1)  # Documents tab
 
     # ========== DOCUMENTS TAB ==========
     def setup_documents_tab(self):
@@ -1511,6 +2013,7 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
                 QMessageBox.critical(self, "Error", "Failed to calculate file checksum")
                 return
             
+            self.db_connection.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
             cur = self.db_connection.cursor()
             
             if self.doc_is_primary.isChecked():
@@ -1539,7 +2042,6 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
             ))
             
             document_id = cur.fetchone()[0]
-            self.db_connection.commit()
             cur.close()
             
             QMessageBox.information(self, "Success", f"✅ Document uploaded successfully!")
@@ -1550,7 +2052,7 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
             self.refresh_documents_list()
             
         except Exception as e:
-            self.db_connection.rollback()
+            print(f"Error uploading document: {e}")
             QMessageBox.critical(self, "Database Error", str(e))
 
     def refresh_documents_list(self):
@@ -1561,6 +2063,7 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
             return
         
         try:
+            self.db_connection.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
             cur = self.db_connection.cursor()
             cur.execute("""
                 SELECT document_id, file_name, description, file_size, 
@@ -1628,7 +2131,7 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
                 self.documents_table.item(row, 0).setData(Qt.UserRole, file_path)
             
         except Exception as e:
-            QMessageBox.critical(self, "Database Error", str(e))
+            print(f"Error refreshing documents: {e}")
 
     def view_document(self, row):
         """View a document"""
@@ -1656,6 +2159,7 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
             return
         
         try:
+            self.db_connection.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
             cur = self.db_connection.cursor()
             cur.execute("SELECT checksum, checksum_algorithm FROM survey_documents WHERE document_id = %s", (doc_id,))
             result = cur.fetchone()
@@ -1676,7 +2180,6 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
             if current_checksum == stored_checksum:
                 cur = self.db_connection.cursor()
                 cur.execute("UPDATE survey_documents SET last_verified = %s WHERE document_id = %s", (date.today(), doc_id))
-                self.db_connection.commit()
                 cur.close()
                 QMessageBox.information(self, "Success", "✅ Document verified successfully!")
             else:
@@ -1685,6 +2188,7 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
             self.refresh_documents_list()
             
         except Exception as e:
+            print(f"Error verifying document: {e}")
             QMessageBox.critical(self, "Error", str(e))
 
     def set_primary_document(self, row):
@@ -1700,15 +2204,15 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
             return
         
         try:
+            self.db_connection.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
             cur = self.db_connection.cursor()
             cur.execute("UPDATE survey_documents SET is_primary = FALSE WHERE survey_id = %s", (self.current_survey_id,))
             cur.execute("UPDATE survey_documents SET is_primary = TRUE WHERE document_id = %s", (doc_id,))
-            self.db_connection.commit()
             cur.close()
             QMessageBox.information(self, "Success", "Primary document updated")
             self.refresh_documents_list()
         except Exception as e:
-            self.db_connection.rollback()
+            print(f"Error setting primary document: {e}")
             QMessageBox.critical(self, "Error", str(e))
 
     def verify_all_documents(self):
@@ -1717,6 +2221,7 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
             return
         
         try:
+            self.db_connection.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
             cur = self.db_connection.cursor()
             cur.execute("SELECT document_id, file_path, checksum, checksum_algorithm FROM survey_documents WHERE survey_id = %s", (self.current_survey_id,))
             documents = cur.fetchall()
@@ -1749,7 +2254,6 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
                     verified += 1
                     cur = self.db_connection.cursor()
                     cur.execute("UPDATE survey_documents SET last_verified = %s WHERE document_id = %s", (date.today(), doc_id))
-                    self.db_connection.commit()
                     cur.close()
                 else:
                     failed += 1
@@ -1762,6 +2266,7 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
             self.refresh_documents_list()
             
         except Exception as e:
+            print(f"Error verifying all documents: {e}")
             QMessageBox.critical(self, "Error", str(e))
 
     def open_selected_document(self):
@@ -2638,6 +3143,7 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
                 user=settings.value("survey_management/user", "postgres"),
                 password=settings.value("survey_management/password", "")
             )
+            conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
             cur = conn.cursor()
             cur.execute("""
                 SELECT f_geometry_column, type, srid
@@ -2691,6 +3197,7 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
         srid = self.current_srid
         
         try:
+            self.db_connection.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
             cur = self.db_connection.cursor()
             cur.execute("DELETE FROM survey_points WHERE survey_id = %s", (self.current_survey_id,))
             
@@ -2724,14 +3231,13 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
                     SET geometry = EXCLUDED.geometry, calculated_area_sqm = EXCLUDED.calculated_area_sqm
                 """, (self.current_survey_id, polygon_wkt, srid, area, False))
             
-            self.db_connection.commit()
             cur.close()
             
             QMessageBox.information(self, "Success", f"✅ Saved {self.coord_table.rowCount()} points")
             self.show_status(f"Saved {self.coord_table.rowCount()} points to database")
             
         except Exception as e:
-            self.db_connection.rollback()
+            print(f"Error saving coordinates: {e}")
             QMessageBox.critical(self, "Database Error", str(e))
 
     def save_traverse_to_postgis(self):
@@ -2773,6 +3279,7 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
                 n += distance * math.cos(math.radians(bearing))
                 points.append((e, n))
             
+            self.db_connection.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
             cur = self.db_connection.cursor()
             cur.execute("DELETE FROM survey_points WHERE survey_id = %s", (self.current_survey_id,))
             
@@ -2804,13 +3311,12 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
                         SET geometry = EXCLUDED.geometry, calculated_area_sqm = EXCLUDED.calculated_area_sqm
                     """, (self.current_survey_id, polygon_wkt, srid, area, False))
             
-            self.db_connection.commit()
             cur.close()
             QMessageBox.information(self, "Success", f"✅ Saved {len(points)} traverse points")
             self.show_status(f"Saved {len(points)} traverse points to database")
             
         except Exception as e:
-            self.db_connection.rollback()
+            print(f"Error saving traverse: {e}")
             QMessageBox.critical(self, "Error", str(e))
 
     def calculate_polygon_area_from_table(self):
@@ -2840,7 +3346,200 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
         
         return abs(area) / 2.0
 
-    def refresh_search(self):
-        """Refresh search results - placeholder"""
-        if self.db_available:
-            self.load_recent_surveys()
+    # ========== SURVEY SAVE METHODS ==========
+    def save_survey_metadata(self):
+        """Save new survey to database"""
+        if not self.db_available:
+            QMessageBox.warning(self, "No Database", "Database not connected")
+            return
+        
+        if not self.plan_number.text() or not self.owner_name.text():
+            QMessageBox.warning(self, "Validation Error", "Plan Number and Owner Name are required")
+            return
+        
+        # Check if we're overwriting
+        if self.current_survey_id:
+            reply = QMessageBox.question(
+                self, "Confirm Save",
+                f"A survey is currently loaded (ID: {self.current_survey_id}).\n"
+                f"Do you want to SAVE AS NEW SURVEY?\n\n"
+                f"Click 'Yes' to create a new survey.\n"
+                f"Click 'No' to cancel.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply == QMessageBox.No:
+                return
+        
+        try:
+            # Get CRS value
+            crs_text = self.crs_combo.currentText()
+            if crs_text == "Custom EPSG (specify below)":
+                crs_value = self.custom_crs.text().strip()
+                if crs_value:
+                    crs_value = f"EPSG:{crs_value}"
+                else:
+                    crs_value = None
+            else:
+                crs_value = crs_text.split(" - ")[0]
+            
+            self.db_connection.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+            cur = self.db_connection.cursor()
+            
+            # Insert new survey
+            cur.execute("""
+                INSERT INTO surveys 
+                (plan_number, owner_name, survey_date, original_crs, 
+                 surveyor_name, local_government, state, notes)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING survey_id
+            """, (
+                self.plan_number.text().strip(),
+                self.owner_name.text().strip(),
+                self.survey_date.date().toPyDate(),
+                crs_value,
+                self.surveyor.text().strip() or None,
+                self.lga.text().strip() or None,
+                self.state.currentText(),
+                self.notes.toPlainText().strip() or None
+            ))
+            
+            survey_id = cur.fetchone()[0]
+            cur.close()
+            
+            # Update current survey
+            self.current_survey_id = survey_id
+            self.survey_id_display.setText(str(survey_id))
+            self.current_survey_label.setText(
+                f"📋 Current Survey: {self.plan_number.text()} (ID: {survey_id})"
+            )
+            self.update_survey_btn.setEnabled(True)
+            
+            # Success message
+            QMessageBox.information(
+                self, "Success",
+                f"✅ New survey saved successfully!\n\nSurvey ID: {survey_id}"
+            )
+            
+            # Refresh lists
+            self.load_all_surveys()
+            self.refresh_documents_list()
+            
+        except psycopg2.IntegrityError as e:
+            QMessageBox.critical(
+                self, "Duplicate Plan Number",
+                f"Plan number '{self.plan_number.text()}' already exists.\n"
+                f"Please use a unique plan number."
+            )
+        except Exception as e:
+            print(f"Error saving survey: {e}")
+            QMessageBox.critical(self, "Database Error", str(e))
+
+    def update_survey_metadata(self):
+        """Update existing survey in database"""
+        if not self.db_available:
+            QMessageBox.warning(self, "No Database", "Database not connected")
+            return
+        
+        if not self.current_survey_id:
+            QMessageBox.warning(
+                self, "No Survey",
+                "No survey is currently loaded for editing.\n"
+                "Please search and load a survey first."
+            )
+            return
+        
+        if not self.plan_number.text() or not self.owner_name.text():
+            QMessageBox.warning(self, "Validation Error", "Plan Number and Owner Name are required")
+            return
+        
+        # Confirm update
+        reply = QMessageBox.question(
+            self, "Confirm Update",
+            f"Are you sure you want to UPDATE Survey ID {self.current_survey_id}?\n\n"
+            f"Plan: {self.plan_number.text()}\n"
+            f"Owner: {self.owner_name.text()}\n\n"
+            f"This will overwrite the existing record.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        
+        if reply == QMessageBox.No:
+            return
+        
+        try:
+            # Get CRS value
+            crs_text = self.crs_combo.currentText()
+            if crs_text == "Custom EPSG (specify below)":
+                crs_value = self.custom_crs.text().strip()
+                if crs_value:
+                    crs_value = f"EPSG:{crs_value}"
+                else:
+                    crs_value = None
+            else:
+                crs_value = crs_text.split(" - ")[0]
+            
+            self.db_connection.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+            cur = self.db_connection.cursor()
+            
+            # Update survey
+            cur.execute("""
+                UPDATE surveys 
+                SET plan_number = %s, owner_name = %s, survey_date = %s, 
+                    original_crs = %s, surveyor_name = %s, local_government = %s, 
+                    state = %s, notes = %s
+                WHERE survey_id = %s
+            """, (
+                self.plan_number.text().strip(),
+                self.owner_name.text().strip(),
+                self.survey_date.date().toPyDate(),
+                crs_value,
+                self.surveyor.text().strip() or None,
+                self.lga.text().strip() or None,
+                self.state.currentText(),
+                self.notes.toPlainText().strip() or None,
+                self.current_survey_id
+            ))
+            
+            cur.close()
+            
+            # Update label
+            self.current_survey_label.setText(
+                f"📋 Current Survey: {self.plan_number.text()} (ID: {self.current_survey_id}) - UPDATED"
+            )
+            
+            QMessageBox.information(
+                self, "Success",
+                f"✅ Survey ID {self.current_survey_id} updated successfully!"
+            )
+            
+            # Refresh lists
+            self.load_all_surveys()
+            self.refresh_documents_list()
+            
+        except psycopg2.IntegrityError as e:
+            QMessageBox.critical(
+                self, "Duplicate Plan Number",
+                f"Plan number '{self.plan_number.text()}' already exists.\n"
+                f"Please use a unique plan number."
+            )
+        except Exception as e:
+            print(f"Error updating survey: {e}")
+            QMessageBox.critical(self, "Database Error", str(e))
+
+    def clear_survey_metadata(self):
+        """Clear survey form"""
+        self.survey_id_display.clear()
+        self.plan_number.clear()
+        self.owner_name.clear()
+        self.survey_date.setDate(QDate.currentDate())
+        self.surveyor.clear()
+        self.lga.clear()
+        self.state.setCurrentIndex(0)
+        self.notes.clear()
+        self.crs_combo.setCurrentIndex(1)  # Reset to default
+        self.custom_crs.clear()
+        self.current_survey_id = None
+        self.current_survey_label.setText("📋 Current Survey: None")
+        self.update_survey_btn.setEnabled(False)
+        self.show_status("Form cleared")
