@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Connection configuration dialog for Survey Management System
+COMPLETE AUTO-SETUP VERSION - Creates everything automatically!
 """
 
 import os
@@ -12,54 +13,51 @@ from qgis.PyQt.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLineEdit, QPushButton, QLabel, QMessageBox,
     QGroupBox, QCheckBox, QComboBox, QSpinBox, 
-    QTextEdit, QTabWidget, QWidget
+    QTextEdit, QTabWidget, QWidget, QProgressBar,
+    QApplication  # QApplication is in QtWidgets, not QtGui
 )
-from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtCore import Qt, QTimer
+from qgis.PyQt.QtGui import QIcon
 from qgis.core import QgsSettings
 
 
 class ConnectionDialog(QDialog):
-    """Dialog for configuring database connection"""
+    """Dialog for configuring database connection with AUTO-CREATION"""
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Survey Management System - Database Connection")
+        self.setWindowTitle("Survey Management System - Database Setup")
         self.setMinimumWidth(650)
-        self.setMinimumHeight(550)
+        self.setMinimumHeight(600)
         
-        # Load saved settings (but don't try to set widgets yet)
+        # Load settings
         self.settings = QgsSettings()
         
-        # First create the UI
+        # Create UI
         self.setup_ui()
         
-        # Then load settings into widgets
+        # Load settings into widgets
         self.load_settings()
         
     def setup_ui(self):
-        """Setup the user interface"""
         layout = QVBoxLayout()
         
         # Title
-        title = QLabel("🔌 DATABASE CONNECTION CONFIGURATION")
-        title.setStyleSheet("font-size: 14pt; font-weight: bold; color: #2c3e50;")
+        title = QLabel("🚀 SURVEY MANAGEMENT SYSTEM - AUTO DATABASE SETUP")
+        title.setStyleSheet("font-size: 14pt; font-weight: bold; color: #27ae60;")
         layout.addWidget(title)
         
         # Description
         desc = QLabel(
-            "Configure the connection to your PostgreSQL/PostGIS database.\n"
-            "The plugin will automatically create the required tables if they don't exist."
+            "This plugin will AUTOMATICALLY create everything for you:\n"
+            "• Database 'survey_management' (if missing)\n"
+            "• PostGIS extension\n"
+            "• All required tables (surveys, points, boundaries, documents, etc.)\n\n"
+            "Just enter your PostgreSQL credentials below and click 'Auto-Setup Database'."
         )
         desc.setWordWrap(True)
-        desc.setStyleSheet("color: #7f8c8d; padding: 5px;")
+        desc.setStyleSheet("background-color: #ecf0f1; padding: 10px; border-radius: 5px;")
         layout.addWidget(desc)
-        
-        # Create tab widget for basic/advanced
-        tab_widget = QTabWidget()
-        
-        # ========== BASIC TAB ==========
-        basic_tab = QWidget()
-        basic_layout = QVBoxLayout()
         
         # Connection settings group
         conn_group = QGroupBox("PostgreSQL Connection Settings")
@@ -67,162 +65,94 @@ class ConnectionDialog(QDialog):
         form_layout = QFormLayout()
         form_layout.setSpacing(10)
         
-        # Host
         self.host_edit = QLineEdit()
         self.host_edit.setPlaceholderText("e.g., localhost or 192.168.1.100")
         form_layout.addRow("Host:", self.host_edit)
         
-        # Port
         self.port_spin = QSpinBox()
         self.port_spin.setRange(1, 65535)
         self.port_spin.setValue(5432)
         form_layout.addRow("Port:", self.port_spin)
         
-        # Database name
         self.db_edit = QLineEdit()
-        self.db_edit.setPlaceholderText("survey_management")
-        form_layout.addRow("Database Name:", self.db_edit)
+        self.db_edit.setText("survey_management")
+        self.db_edit.setEnabled(False)  # Fixed database name
+        self.db_edit.setStyleSheet("background-color: #f0f0f0;")
+        form_layout.addRow("Database to Create:", self.db_edit)
         
-        # Username
         self.user_edit = QLineEdit()
         self.user_edit.setPlaceholderText("postgres")
         form_layout.addRow("Username:", self.user_edit)
         
-        # Password
         self.password_edit = QLineEdit()
         self.password_edit.setEchoMode(QLineEdit.Password)
         self.password_edit.setPlaceholderText("Your password")
         form_layout.addRow("Password:", self.password_edit)
         
-        # Save password checkbox
-        self.save_password_cb = QCheckBox("Save password (encrypted in QGIS settings)")
+        self.save_password_cb = QCheckBox("Save password (encrypted)")
         self.save_password_cb.setChecked(True)
         form_layout.addRow("", self.save_password_cb)
         
         conn_group.setLayout(form_layout)
-        basic_layout.addWidget(conn_group)
+        layout.addWidget(conn_group)
         
-        basic_tab.setLayout(basic_layout)
-        tab_widget.addTab(basic_tab, "Basic Settings")
+        # Progress bar
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        layout.addWidget(self.progress_bar)
         
-        # ========== ADVANCED TAB ==========
-        advanced_tab = QWidget()
-        adv_layout = QVBoxLayout()
-        
-        adv_group = QGroupBox("Advanced Connection Options")
-        adv_group.setStyleSheet("QGroupBox { font-weight: bold; }")
-        adv_form = QFormLayout()
-        adv_form.setSpacing(10)
-        
-        # Schema
-        self.schema_edit = QLineEdit()
-        self.schema_edit.setPlaceholderText("public")
-        adv_form.addRow("Schema:", self.schema_edit)
-        
-        # SSL Mode
-        self.ssl_combo = QComboBox()
-        self.ssl_combo.addItems(["disable", "allow", "prefer", "require", "verify-ca", "verify-full"])
-        adv_form.addRow("SSL Mode:", self.ssl_combo)
-        
-        # Connection timeout
-        self.timeout_spin = QSpinBox()
-        self.timeout_spin.setRange(1, 60)
-        self.timeout_spin.setValue(10)
-        self.timeout_spin.setSuffix(" seconds")
-        adv_form.addRow("Timeout:", self.timeout_spin)
-        
-        adv_group.setLayout(adv_form)
-        adv_layout.addWidget(adv_group)
-        
-        # Connection pool settings
-        pool_group = QGroupBox("Connection Pool Settings")
-        pool_group.setStyleSheet("QGroupBox { font-weight: bold; }")
-        pool_form = QFormLayout()
-        
-        self.min_connections = QSpinBox()
-        self.min_connections.setRange(1, 10)
-        self.min_connections.setValue(1)
-        pool_form.addRow("Min Connections:", self.min_connections)
-        
-        self.max_connections = QSpinBox()
-        self.max_connections.setRange(1, 50)
-        self.max_connections.setValue(10)
-        pool_form.addRow("Max Connections:", self.max_connections)
-        
-        pool_group.setLayout(pool_form)
-        adv_layout.addWidget(pool_group)
-        
-        adv_layout.addStretch()
-        advanced_tab.setLayout(adv_layout)
-        tab_widget.addTab(advanced_tab, "Advanced Settings")
-        
-        layout.addWidget(tab_widget)
-        
-        # Test connection button
-        test_btn = QPushButton("🔌 Test Connection")
-        test_btn.setStyleSheet("background-color: #3498db; color: white; font-weight: bold; padding: 8px;")
-        test_btn.clicked.connect(self.test_connection)
-        layout.addWidget(test_btn)
-        
-        # Status display
+        # Status text
         self.status_text = QTextEdit()
         self.status_text.setReadOnly(True)
-        self.status_text.setMaximumHeight(120)
+        self.status_text.setMaximumHeight(150)
         self.status_text.setStyleSheet("background-color: #ecf0f1; font-family: monospace;")
         layout.addWidget(self.status_text)
         
-        # Button box
+        # Button layout
         button_layout = QHBoxLayout()
         
-        self.save_btn = QPushButton("💾 Save & Connect")
-        self.save_btn.setStyleSheet("background-color: #27ae60; color: white; font-weight: bold; padding: 8px;")
-        self.save_btn.clicked.connect(self.save_and_connect)
-        button_layout.addWidget(self.save_btn)
+        self.auto_setup_btn = QPushButton("🚀 AUTO-SETUP DATABASE")
+        self.auto_setup_btn.setStyleSheet("background-color: #27ae60; color: white; font-weight: bold; padding: 10px; font-size: 12pt;")
+        self.auto_setup_btn.clicked.connect(self.auto_setup_database)
+        button_layout.addWidget(self.auto_setup_btn)
+        
+        self.test_btn = QPushButton("🔌 Test Connection Only")
+        self.test_btn.setStyleSheet("background-color: #3498db; color: white; padding: 8px;")
+        self.test_btn.clicked.connect(self.test_connection)
+        button_layout.addWidget(self.test_btn)
         
         self.cancel_btn = QPushButton("Cancel")
-        self.cancel_btn.setStyleSheet("background-color: #e74c3c; color: white; font-weight: bold; padding: 8px;")
+        self.cancel_btn.setStyleSheet("background-color: #e74c3c; color: white; padding: 8px;")
         self.cancel_btn.clicked.connect(self.reject)
         button_layout.addWidget(self.cancel_btn)
         
         layout.addLayout(button_layout)
         
+        # Note about permissions
+        note = QLabel("Note: Your PostgreSQL user needs CREATE DATABASE permissions.\nDefault 'postgres' superuser always works.")
+        note.setStyleSheet("color: #7f8c8d; font-style: italic;")
+        layout.addWidget(note)
+        
         self.setLayout(layout)
         
     def load_settings(self):
-        """Load saved connection settings into widgets"""
+        """Load saved settings into widgets"""
         self.host_edit.setText(self.settings.value("survey_management/host", "localhost"))
         self.port_spin.setValue(int(self.settings.value("survey_management/port", "5432")))
-        self.db_edit.setText(self.settings.value("survey_management/database", "survey_management"))
         self.user_edit.setText(self.settings.value("survey_management/user", "postgres"))
         
         # Password is stored encrypted by QGIS
         encrypted_pass = self.settings.value("survey_management/password", "")
         if encrypted_pass:
             self.password_edit.setText(encrypted_pass)
-            
-        self.schema_edit.setText(self.settings.value("survey_management/schema", "public"))
-        self.ssl_combo.setCurrentText(self.settings.value("survey_management/sslmode", "prefer"))
-        self.timeout_spin.setValue(int(self.settings.value("survey_management/timeout", "10")))
-        
-        # Pool settings
-        self.min_connections.setValue(int(self.settings.value("survey_management/min_conn", "1")))
-        self.max_connections.setValue(int(self.settings.value("survey_management/max_conn", "10")))
         
     def save_settings(self):
         """Save connection settings"""
         self.settings.setValue("survey_management/host", self.host_edit.text())
         self.settings.setValue("survey_management/port", str(self.port_spin.value()))
-        self.settings.setValue("survey_management/database", self.db_edit.text())
+        self.settings.setValue("survey_management/database", "survey_management")
         self.settings.setValue("survey_management/user", self.user_edit.text())
-        self.settings.setValue("survey_management/schema", self.schema_edit.text())
-        self.settings.setValue("survey_management/sslmode", self.ssl_combo.currentText())
-        self.settings.setValue("survey_management/timeout", str(self.timeout_spin.value()))
         
-        # Pool settings
-        self.settings.setValue("survey_management/min_conn", str(self.min_connections.value()))
-        self.settings.setValue("survey_management/max_conn", str(self.max_connections.value()))
-        
-        # Save password if requested
         if self.save_password_cb.isChecked():
             self.settings.setValue("survey_management/password", self.password_edit.text())
         else:
@@ -230,82 +160,329 @@ class ConnectionDialog(QDialog):
             
         self.settings.sync()
         
-    def get_connection_params(self):
-        """Get connection parameters dictionary"""
-        params = {
-            "host": self.host_edit.text(),
-            "port": self.port_spin.value(),
-            "database": self.db_edit.text(),
-            "user": self.user_edit.text(),
-            "password": self.password_edit.text(),
-            "connect_timeout": self.timeout_spin.value(),
-            "sslmode": self.ssl_combo.currentText()
-        }
-        return params
+    def log(self, message):
+        """Add message to status log"""
+        self.status_text.append(message)
+        QApplication.processEvents()
         
-    def test_connection(self):
-        """Test the database connection"""
+    def auto_setup_database(self):
+        """COMPLETE AUTO-SETUP: Creates database, enables PostGIS, creates all tables"""
         self.status_text.clear()
-        self.status_text.append("🔄 Testing connection...")
-        self.status_text.append(f"Host: {self.host_edit.text()}:{self.port_spin.value()}")
-        self.status_text.append(f"Database: {self.db_edit.text()}")
-        self.status_text.append(f"User: {self.user_edit.text()}")
+        self.auto_setup_btn.setEnabled(False)
+        self.test_btn.setEnabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 5)
         
         try:
-            params = self.get_connection_params()
-            conn = psycopg2.connect(**params)
+            # Step 1: Get connection parameters
+            host = self.host_edit.text()
+            port = self.port_spin.value()
+            user = self.user_edit.text()
+            password = self.password_edit.text()
+            db_name = "survey_management"
             
-            # Get PostgreSQL version
+            self.log("=" * 50)
+            self.log("🚀 STARTING AUTO DATABASE SETUP")
+            self.log("=" * 50)
+            self.log(f"Host: {host}:{port}")
+            self.log(f"User: {user}")
+            self.log(f"Target Database: {db_name}")
+            self.progress_bar.setValue(1)
+            
+            # Step 2: Connect to default 'postgres' database
+            self.log("\n📡 Connecting to PostgreSQL server...")
+            try:
+                conn = psycopg2.connect(
+                    host=host,
+                    port=port,
+                    database="postgres",
+                    user=user,
+                    password=password,
+                    connect_timeout=10
+                )
+                conn.autocommit = True
+                self.log("✅ Connected to 'postgres' database")
+            except psycopg2.OperationalError:
+                # Try template1 as fallback
+                try:
+                    conn = psycopg2.connect(
+                        host=host,
+                        port=port,
+                        database="template1",
+                        user=user,
+                        password=password,
+                        connect_timeout=10
+                    )
+                    conn.autocommit = True
+                    self.log("✅ Connected to 'template1' database")
+                except psycopg2.OperationalError as e:
+                    self.log(f"❌ Could not connect to PostgreSQL server: {str(e)}")
+                    raise Exception("Cannot connect to PostgreSQL server. Make sure it's installed and running.")
+            
+            self.progress_bar.setValue(2)
+            
+            # Step 3: Check if our database exists and create if needed
             cur = conn.cursor()
-            cur.execute("SELECT version()")
-            version = cur.fetchone()[0]
+            cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (db_name,))
+            exists = cur.fetchone()
             
-            # Check PostGIS
-            cur.execute("SELECT PostGIS_Version()")
-            postgis_version = cur.fetchone()[0]
+            if not exists:
+                self.log("\n📁 Creating database 'survey_management'...")
+                try:
+                    cur.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(db_name)))
+                    self.log("✅ Database created successfully")
+                except Exception as e:
+                    self.log(f"❌ Failed to create database: {str(e)}")
+                    self.log("\n💡 TIP: Use superuser 'postgres' or ask admin to grant CREATE DATABASE permission")
+                    raise Exception(f"Cannot create database: {str(e)}")
+            else:
+                self.log("\n✅ Database 'survey_management' already exists")
             
-            # Check if our tables exist
+            cur.close()
+            conn.close()
+            self.progress_bar.setValue(3)
+            
+            # Step 4: Connect to new database and enable PostGIS
+            self.log("\n🔌 Connecting to new database...")
+            conn = psycopg2.connect(
+                host=host,
+                port=port,
+                database=db_name,
+                user=user,
+                password=password
+            )
+            conn.autocommit = True
+            cur = conn.cursor()
+            self.log("✅ Connected to 'survey_management'")
+            
+            # Check if PostGIS is available
+            self.log("\n🗺️ Checking PostGIS installation...")
+            cur.execute("SELECT 1 FROM pg_available_extensions WHERE name = 'postgis'")
+            if not cur.fetchone():
+                self.log("❌ PostGIS extension not found on this server")
+                self.log("\n💡 Please install PostGIS first:")
+                self.log("  • Windows: Run Stack Builder from PostgreSQL start menu")
+                self.log("  • Linux: sudo apt install postgis")
+                self.log("  • macOS: brew install postgis")
+                raise Exception("PostGIS not installed")
+            
+            self.log("✅ PostGIS is available")
+            
+            # Enable PostGIS
+            self.log("\n🔧 Enabling PostGIS extension...")
+            cur.execute("CREATE EXTENSION IF NOT EXISTS postgis")
+            self.log("✅ PostGIS enabled successfully")
+            
+            self.progress_bar.setValue(4)
+            
+            # Step 5: Create all tables
+            self.log("\n📋 Creating all required tables...")
+            
+            # Surveys table
             cur.execute("""
-                SELECT table_name 
-                FROM information_schema.tables 
-                WHERE table_schema = 'public'
-                ORDER BY table_name
+                CREATE TABLE IF NOT EXISTS surveys (
+                    survey_id SERIAL PRIMARY KEY,
+                    plan_number VARCHAR(50) NOT NULL UNIQUE,
+                    owner_name VARCHAR(200),
+                    survey_date DATE,
+                    original_crs VARCHAR(100),
+                    surveyor_name VARCHAR(100),
+                    local_government VARCHAR(100),
+                    state VARCHAR(50),
+                    notes TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_by VARCHAR(50),
+                    is_archived BOOLEAN DEFAULT FALSE,
+                    file_path TEXT,
+                    pdf_path TEXT,
+                    description_id INTEGER
+                )
             """)
-            tables = cur.fetchall()
+            self.log("  ✅ surveys table created")
+            
+            # Survey points table
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS survey_points (
+                    point_id SERIAL PRIMARY KEY,
+                    survey_id INTEGER REFERENCES surveys(survey_id) ON DELETE CASCADE,
+                    point_number INTEGER,
+                    geometry GEOMETRY(POINT),
+                    raw_coordinates TEXT,
+                    raw_crs VARCHAR(100),
+                    notes TEXT,
+                    description VARCHAR(50)
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_survey_points_geometry ON survey_points USING GIST(geometry)")
+            self.log("  ✅ survey_points table created")
+            
+            # Survey boundaries table
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS survey_boundaries (
+                    boundary_id SERIAL PRIMARY KEY,
+                    survey_id INTEGER UNIQUE REFERENCES surveys(survey_id) ON DELETE CASCADE,
+                    geometry GEOMETRY(POLYGON),
+                    calculated_area_sqm NUMERIC(15,2),
+                    calculated_area_hectares NUMERIC(15,4),
+                    verified BOOLEAN DEFAULT FALSE
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_survey_boundaries_geometry ON survey_boundaries USING GIST(geometry)")
+            self.log("  ✅ survey_boundaries table created")
+            
+            # Survey traverses table
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS survey_traverses (
+                    traverse_id SERIAL PRIMARY KEY,
+                    survey_id INTEGER REFERENCES surveys(survey_id) ON DELETE CASCADE,
+                    traverse_name VARCHAR(100),
+                    start_point_id INTEGER REFERENCES survey_points(point_id),
+                    is_closed BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            self.log("  ✅ survey_traverses table created")
+            
+            # Traverse legs table
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS traverse_legs (
+                    leg_id SERIAL PRIMARY KEY,
+                    traverse_id INTEGER REFERENCES survey_traverses(traverse_id) ON DELETE CASCADE,
+                    leg_number INTEGER NOT NULL,
+                    from_point_id INTEGER REFERENCES survey_points(point_id),
+                    bearing_decimal DECIMAL(10,6),
+                    distance_meters DECIMAL(15,3),
+                    bearing_raw VARCHAR(50),
+                    distance_raw VARCHAR(50),
+                    geometry GEOMETRY(LINESTRING),
+                    notes TEXT,
+                    UNIQUE(traverse_id, leg_number)
+                )
+            """)
+            self.log("  ✅ traverse_legs table created")
+            
+            # Survey documents table
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS survey_documents (
+                    document_id SERIAL PRIMARY KEY,
+                    survey_id INTEGER REFERENCES surveys(survey_id) ON DELETE CASCADE,
+                    file_path TEXT NOT NULL,
+                    file_name VARCHAR(255),
+                    file_size INTEGER,
+                    checksum VARCHAR(64),
+                    checksum_algorithm VARCHAR(10) DEFAULT 'MD5',
+                    is_primary BOOLEAN DEFAULT TRUE,
+                    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_verified DATE,
+                    description TEXT
+                )
+            """)
+            self.log("  ✅ survey_documents table created")
             
             cur.close()
             conn.close()
             
-            self.status_text.append("\n✅ CONNECTION SUCCESSFUL!")
-            self.status_text.append(f"📊 PostgreSQL: {version[:50]}...")
-            self.status_text.append(f"🗺️ PostGIS: {postgis_version}")
+            self.progress_bar.setValue(5)
             
-            if tables:
-                self.status_text.append(f"\n📋 Existing tables: {len(tables)} found")
-                for table in tables[:5]:  # Show first 5
-                    self.status_text.append(f"  • {table[0]}")
-                if len(tables) > 5:
-                    self.status_text.append(f"  ... and {len(tables)-5} more")
-            else:
-                self.status_text.append("\n📋 No tables found - will be created on first use")
+            # Step 6: Success!
+            self.log("\n" + "=" * 50)
+            self.log("✅✅✅ AUTO SETUP COMPLETE! ✅✅✅")
+            self.log("=" * 50)
+            self.log("\n🎉 All done! Your database is ready:")
+            self.log("  • Database: survey_management")
+            self.log("  • PostGIS: Enabled")
+            self.log("  • Tables: 6 tables created")
+            self.log("\n📊 Tables created:")
+            self.log("  • surveys")
+            self.log("  • survey_points")
+            self.log("  • survey_boundaries")
+            self.log("  • survey_traverses")
+            self.log("  • traverse_legs")
+            self.log("  • survey_documents")
+            
+            # Save settings and accept
+            self.save_settings()
+            
+            QMessageBox.information(
+                self, "Success!",
+                "✅✅✅ DATABASE SETUP COMPLETE! ✅✅✅\n\n"
+                "All done! Your database is ready to use.\n\n"
+                "• Database: survey_management\n"
+                "• PostGIS: Enabled\n"
+                "• Tables: 6 tables created\n\n"
+                "Click OK to start using the plugin."
+            )
+            
+            self.accept()
             
         except psycopg2.OperationalError as e:
-            self.status_text.append(f"\n❌ Connection failed: {str(e)}")
-            self.status_text.append("\nTroubleshooting tips:")
-            self.status_text.append("• Is PostgreSQL running?")
-            self.status_text.append("• Are host/port correct?")
-            self.status_text.append("• Is username/password valid?")
+            self.log(f"\n❌ Connection error: {str(e)}")
+            QMessageBox.critical(
+                self, "Connection Failed",
+                f"❌ Could not connect to PostgreSQL.\n\n"
+                f"Error: {str(e)}\n\n"
+                f"Make sure:\n"
+                f"• PostgreSQL is installed and running\n"
+                f"• Host/port are correct\n"
+                f"• Username/password are valid"
+            )
         except Exception as e:
-            self.status_text.append(f"\n❌ Error: {str(e)}")
+            self.log(f"\n❌ Setup failed: {str(e)}")
+            QMessageBox.critical(
+                self, "Setup Failed",
+                f"❌ Database setup failed.\n\nError: {str(e)}"
+            )
+        finally:
+            self.auto_setup_btn.setEnabled(True)
+            self.test_btn.setEnabled(True)
+            self.progress_bar.setVisible(False)
             
-    def save_and_connect(self):
-        """Save settings and accept dialog"""
-        self.save_settings()
-        self.accept()
+    def test_connection(self):
+        """Test connection to an EXISTING database"""
+        self.status_text.clear()
+        self.log("🔄 Testing connection to survey_management...")
+        
+        try:
+            conn = psycopg2.connect(
+                host=self.host_edit.text(),
+                port=self.port_spin.value(),
+                database="survey_management",
+                user=self.user_edit.text(),
+                password=self.password_edit.text(),
+                connect_timeout=5
+            )
+            
+            cur = conn.cursor()
+            
+            # Check PostGIS
+            try:
+                cur.execute("SELECT PostGIS_Version()")
+                postgis_version = cur.fetchone()[0]
+                self.log(f"✅ PostGIS version: {postgis_version}")
+            except:
+                self.log("⚠️ PostGIS not enabled")
+            
+            # Check tables
+            try:
+                cur.execute("SELECT COUNT(*) FROM surveys")
+                survey_count = cur.fetchone()[0]
+                self.log(f"📊 Surveys in database: {survey_count}")
+            except:
+                self.log("⚠️ surveys table not found")
+            
+            cur.close()
+            conn.close()
+            
+            self.log("✅ Connection successful!")
+            
+        except psycopg2.OperationalError as e:
+            self.log(f"❌ Connection failed: {str(e)}")
+            self.log("\n💡 Use 'AUTO-SETUP DATABASE' button to create everything automatically!")
 
 
 class DatabaseManager:
-    """Manages database connections and setup"""
+    """Manages database connections and setup with enhanced error handling"""
     
     def __init__(self):
         self.settings = QgsSettings()
@@ -332,58 +509,99 @@ class DatabaseManager:
             return None
             
     def ensure_database_exists(self):
-        """Check if database exists, create if not"""
+        """
+        Check if database exists, create if not - with enhanced error handling
+        Returns: (success, message)
+        """
         try:
-            # Connect to default postgres database first
-            conn = psycopg2.connect(
-                host=self.settings.value("survey_management/host", "localhost"),
-                port=int(self.settings.value("survey_management/port", "5432")),
-                database="postgres",
-                user=self.settings.value("survey_management/user", "postgres"),
-                password=self.settings.value("survey_management/password", ""),
-                connect_timeout=5
-            )
-            conn.autocommit = True
+            host = self.settings.value("survey_management/host", "localhost")
+            port = int(self.settings.value("survey_management/port", "5432"))
+            user = self.settings.value("survey_management/user", "postgres")
+            password = self.settings.value("survey_management/password", "")
+            db_name = self.settings.value("survey_management/database", "survey_management")
+            
+            # Try to connect to default postgres database first
+            try:
+                conn = psycopg2.connect(
+                    host=host,
+                    port=port,
+                    database="postgres",
+                    user=user,
+                    password=password,
+                    connect_timeout=5
+                )
+                conn.autocommit = True
+                connected_db = "postgres"
+            except psycopg2.OperationalError:
+                # If postgres fails, try template1
+                try:
+                    conn = psycopg2.connect(
+                        host=host,
+                        port=port,
+                        database="template1",
+                        user=user,
+                        password=password,
+                        connect_timeout=5
+                    )
+                    conn.autocommit = True
+                    connected_db = "template1"
+                except psycopg2.OperationalError as e:
+                    return False, f"Cannot connect to PostgreSQL server.\nError: {str(e)}\n\nMake sure PostgreSQL is installed and running."
+
             cur = conn.cursor()
             
             # Check if our database exists
-            db_name = self.settings.value("survey_management/database", "survey_management")
             cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (db_name,))
             exists = cur.fetchone()
             
             if not exists:
-                # Create database
-                cur.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(db_name)))
-                print(f"✅ Created database: {db_name}")
-                
-                # Connect to new database and create extensions
-                cur.close()
-                conn.close()
-                
+                # Try to create database
+                try:
+                    cur.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(db_name)))
+                    print(f"✅ Created database: {db_name}")
+                except Exception as e:
+                    cur.close()
+                    conn.close()
+                    return False, f"Cannot create database '{db_name}'.\nError: {str(e)}\n\nPossible solutions:\n• Use a superuser account (postgres)\n• Grant CREATE DATABASE permission to your user\n• Create the database manually"
+            
+            cur.close()
+            conn.close()
+            
+            # Now connect to the new database and create extensions
+            try:
                 conn = psycopg2.connect(
-                    host=self.settings.value("survey_management/host", "localhost"),
-                    port=int(self.settings.value("survey_management/port", "5432")),
+                    host=host,
+                    port=port,
                     database=db_name,
-                    user=self.settings.value("survey_management/user", "postgres"),
-                    password=self.settings.value("survey_management/password", "")
+                    user=user,
+                    password=password
                 )
                 conn.autocommit = True
                 cur = conn.cursor()
                 
+                # Check if PostGIS is available
+                cur.execute("SELECT 1 FROM pg_available_extensions WHERE name = 'postgis'")
+                if not cur.fetchone():
+                    cur.close()
+                    conn.close()
+                    return False, "PostGIS extension is not installed on this PostgreSQL server.\n\nPlease install PostGIS first:\n• Windows: Use Stack Builder\n• Linux: sudo apt install postgis\n• macOS: brew install postgis"
+                
                 # Create PostGIS extension
                 cur.execute("CREATE EXTENSION IF NOT EXISTS postgis")
-                print("✅ Created PostGIS extension")
+                print("✅ Created/verified PostGIS extension")
                 
-            cur.close()
-            conn.close()
-            return True
+                cur.close()
+                conn.close()
+                return True, "Database ready"
+                
+            except Exception as e:
+                return False, f"Connected but cannot create extensions: {str(e)}"
             
         except Exception as e:
-            print(f"❌ Error ensuring database exists: {e}")
-            return False
+            return False, f"Unexpected error: {str(e)}"
             
     def create_tables(self):
-        """Create all required tables if they don't exist using the updated schema"""
+        """Create all required tables if they don't exist"""
         if not self.connection:
             self.connection = self.get_connection_from_settings()
             
@@ -414,7 +632,6 @@ class DatabaseManager:
                     description_id INTEGER
                 )
             """)
-            print("✅ Created/verified surveys table")
             
             # ==================== SURVEY POINTS TABLE ====================
             cur.execute("""
@@ -429,7 +646,6 @@ class DatabaseManager:
                     description VARCHAR(50)
                 )
             """)
-            print("✅ Created/verified survey_points table")
             
             # Create spatial index
             cur.execute("CREATE INDEX IF NOT EXISTS idx_survey_points_geometry ON survey_points USING GIST(geometry)")
@@ -445,7 +661,6 @@ class DatabaseManager:
                     verified BOOLEAN DEFAULT FALSE
                 )
             """)
-            print("✅ Created/verified survey_boundaries table")
             
             # Create spatial index
             cur.execute("CREATE INDEX IF NOT EXISTS idx_survey_boundaries_geometry ON survey_boundaries USING GIST(geometry)")
@@ -461,7 +676,6 @@ class DatabaseManager:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
-            print("✅ Created/verified survey_traverses table")
             
             # ==================== TRAVERSE LEGS TABLE ====================
             cur.execute("""
@@ -479,14 +693,13 @@ class DatabaseManager:
                     UNIQUE(traverse_id, leg_number)
                 )
             """)
-            print("✅ Created/verified traverse_legs table")
             
             # ==================== SURVEY DOCUMENTS TABLE ====================
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS survey_documents (
                     document_id SERIAL PRIMARY KEY,
                     survey_id INTEGER REFERENCES surveys(survey_id) ON DELETE CASCADE,
-                    pdf_path TEXT NOT NULL,
+                    file_path TEXT NOT NULL,
                     file_name VARCHAR(255),
                     file_size INTEGER,
                     checksum VARCHAR(64),
@@ -497,12 +710,11 @@ class DatabaseManager:
                     description TEXT
                 )
             """)
-            print("✅ Created/verified survey_documents table")
             
             self.connection.commit()
             cur.close()
             
-            print("\n✅ All tables created/verified successfully!")
+            print("✅ All tables created successfully")
             return True
             
         except Exception as e:
