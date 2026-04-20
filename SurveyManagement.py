@@ -15,6 +15,7 @@ from qgis.core import Qgis
 import os.path
 import sys
 
+from psycopg2 import sql as pgsql
 try:
     import psycopg2
     from psycopg2 import sql
@@ -270,7 +271,7 @@ class SurveyManagement:
                 counts = []
                 for table in tables:
                     try:
-                        cur.execute(f"SELECT COUNT(*) FROM {table}")
+                        cur.execute(pgsql.SQL("SELECT COUNT(*) FROM {}").format(pgsql.Identifier(table)))
                         count = cur.fetchone()[0]
                         counts.append(f"• {table}: {count:,} records")
                     except Exception:
