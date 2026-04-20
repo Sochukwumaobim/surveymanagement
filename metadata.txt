@@ -1,51 +1,68 @@
-; Survey Management System - Nigerian Survey Records
-; All metadata must be UTF-8 encoded
+# Metadata for Survey Management System QGIS Plugin
 
 [general]
-; === REQUIRED FIELDS ===
 name=Survey Management System
 qgisMinimumVersion=3.0
-description=Digital archiving for Nigerian survey records with bearing/distance input
-about=Complete survey management solution for Nigerian surveyors. Features:
-    • CRS management with Nigerian presets (Minna, etc.)
-    • Bearing/distance input with DMS support (45°30'15")
-    • Direct coordinate entry
-    • Document management with checksum verification
-    • PostGIS integration with SRID preservation
-    • Search and edit existing surveys
-    • 50-year data durability with MD5 checksums
-    • Nigerian states and LGA support
-version=1.0.0
+qgisMaximumVersion=3.99
+description=Digital archiving system for Nigerian cadastral survey records with DXF import, AI data extraction, coordinate/traverse calculations, document management, and PostgreSQL/PostGIS integration.
+version=1.2.0
 author=ASTROMAT GEO-SERVICES
 email=ugwusochukwuma@gmail.com
 
-; === REQUIRED - Code repository ===
-repository=https://github.com/Sochukwumaobim/surveymanagement
+about=Comprehensive digital archiving system for Nigerian survey records.
 
-; === OPTIONAL BUT RECOMMENDED ===
+  FEATURES:
+  - AutoCAD DXF/DWG import with AI-powered metadata extraction
+  - Bearing and distance traverse calculator (WCB and quadrant, DMS input)
+  - 1:5000 Nigerian Survey Regulations precision ratio check
+  - Coordinate input with PostGIS spatial storage
+  - Document upload with MD5 checksum integrity verification
+  - Three-tier access control (superuser, surveyor, viewer)
+  - Full audit trail of all actions
+  - Global search across all database tables
+  - Adjoining survey boundary detection
+  - First-run setup wizard (installs psycopg2, creates database automatically)
+
+  REQUIREMENTS: PostgreSQL 12+ with PostGIS extension.
+
 tracker=https://github.com/Sochukwumaobim/surveymanagement/issues
+repository=https://github.com/Sochukwumaobim/surveymanagement
 homepage=https://github.com/Sochukwumaobim/surveymanagement
 
-; === PLUGIN CLASSIFICATION ===
-category=Database
-tags=nigeria,survey,cadastre,postgis,bearing,distance,minna,crs,parcel,land
+hasProcessingProvider=no
 
-; === VISUAL IDENTITY ===
+changelog=
+    Version 1.2.0 (April 2026):
+    NEW: AutoCAD DXF/DWG import — extract beacon coordinates, traverse
+         legs, bearings, distances and metadata from AutoCAD plan files
+    NEW: AI-powered metadata extraction (plan number, owner, surveyor,
+         LGA, state, date) via hosted server — no API key needed
+    NEW: DXF import preview dialog — review and confirm before loading
+    NEW: First-run setup wizard — installs psycopg2 and creates database
+         automatically, no command line required
+    NEW: User login with username and password (default: admin / admin123)
+    NEW: Three-tier access control — superuser, surveyor, viewer roles
+    NEW: Full audit trail in audit_log table
+    NEW: User Administration panel for superusers
+    NEW: Traverse precision ratio (1:5000 Nigerian Survey Regulations)
+    NEW: Adjoining survey boundary detection via PostGIS ST_DWithin
+    NEW: Custom CRS input with live EPSG validation
+    FIX: Traverse delete button index bug corrected
+    FIX: Documents tab index resolved using indexOf()
+
+    Version 1.0.0 (March 2026):
+    Initial release — survey metadata, coordinates, traverses,
+    documents, PostgreSQL/PostGIS integration, global search.
+
+tags=survey, cadastral, Nigeria, bearing, traverse, DXF, AutoCAD, PostgreSQL, PostGIS, land survey, coordinate
+
+category=Database
 icon=icon.png
 
-; === COMPATIBILITY ===
-qgisMaximumVersion=3.99
-
-; === RELEASE STATUS ===
+# Set to False — plugin is stable and tested
 experimental=False
+
+# Not deprecated
 deprecated=False
 
-; === CHANGELOG ===
-changelog=
-    1.0.0 - First stable release
-    • Complete survey metadata management
-    • Bearing/distance input with DMS support
-    • Document upload with checksum verification
-    • PostGIS integration with SRID
-    • Nigerian CRS presets and states
-    • Search and edit functionality
+server=False
