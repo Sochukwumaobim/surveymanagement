@@ -6,8 +6,16 @@ COMPLETE AUTO-SETUP VERSION - Creates everything automatically!
 
 import os
 import json
-import psycopg2
-from psycopg2 import sql
+
+# psycopg2 may not be installed yet — wrap gracefully
+try:
+    import psycopg2
+    from psycopg2 import sql
+    PSYCOPG2_AVAILABLE = True
+except ImportError:
+    PSYCOPG2_AVAILABLE = False
+    psycopg2 = None
+    sql = None
 
 from qgis.PyQt.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
@@ -710,10 +718,43 @@ class DatabaseManager:
                     description TEXT
                 )
             """)
-            
+
+            # ==================== APP USERS TABLE ====================
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS app_users (
+                    user_id       SERIAL PRIMARY KEY,
+                    username      VARCHAR(50) UNIQUE NOT NULL,
+                    password_hash VARCHAR(64) NOT NULL,
+                    password_salt VARCHAR(32) NOT NULL,
+                    role          VARCHAR(20) NOT NULL DEFAULT 'viewer'
+                                      CHECK (role IN ('superuser','surveyor','viewer')),
+                    full_name     VARCHAR(200),
+                    email         VARCHAR(200),
+                    is_active     BOOLEAN DEFAULT TRUE,
+                    created_by    INTEGER REFERENCES app_users(user_id) ON DELETE SET NULL,
+                    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_login    TIMESTAMP
+                )
+            """)
+
+            # ==================== AUDIT LOG TABLE ====================
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS audit_log (
+                    log_id     BIGSERIAL PRIMARY KEY,
+                    user_id    INTEGER REFERENCES app_users(user_id) ON DELETE SET NULL,
+                    username   VARCHAR(50),
+                    action     VARCHAR(80) NOT NULL,
+                    table_name VARCHAR(100),
+                    record_id  INTEGER,
+                    old_values TEXT,
+                    new_values TEXT,
+                    logged_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
             self.connection.commit()
             cur.close()
-            
+
             print("✅ All tables created successfully")
             return True
             
