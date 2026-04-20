@@ -106,7 +106,7 @@ class TableLoaderThread(QThread):
                 has_geometry = cur.fetchone() is not None
                 
                 # Get row count
-                cur.execute(f'SELECT COUNT(*) FROM "{table_name}"')
+                cur.execute(pgsql.SQL('SELECT COUNT(*) FROM {}').format(pgsql.Identifier(table_name)))
                 row_count = cur.fetchone()[0]
                 
                 # Get column info
@@ -165,7 +165,7 @@ class DataPreviewThread(QThread):
             
             # Get sample data
             self.progress.emit(f"Loading data from {self.table_name}...")
-            cur.execute(f'SELECT * FROM "{self.table_name}" LIMIT {self.limit}')
+            cur.execute(pgsql.SQL('SELECT * FROM {} LIMIT %s').format(pgsql.Identifier(self.table_name)), (self.limit,))
             data = cur.fetchall()
             
             cur.close()
@@ -1239,13 +1239,16 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
             else:
                 limit_clause = f"LIMIT {limit_text}"
             
-            cur.execute(f"""
+            base_query = """
                 SELECT survey_id, plan_number, owner_name, surveyor_name, 
                        local_government, state, survey_date
                 FROM surveys 
                 ORDER BY survey_date DESC NULLS LAST, survey_id DESC
-                {limit_clause}
-            """)
+            """
+            if limit_clause:
+                cur.execute(base_query + " LIMIT %s", (int(limit_text),))
+            else:
+                cur.execute(base_query)
             
             results = cur.fetchall()
             cur.close()
@@ -2126,7 +2129,7 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
 
     def calculate_file_checksum(self, file_path, algorithm='MD5'):
         """Calculate checksum of a file"""
-        hash_func = hashlib.md5() if algorithm == 'MD5' else hashlib.sha256()
+        hash_func = hashlib.md5(usedforsecurity=False) if algorithm == 'MD5' else hashlib.sha256()
         
         try:
             with open(file_path, 'rb') as f:
