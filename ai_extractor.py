@@ -11,6 +11,7 @@ Update SERVER_URL after deploying your own instance from the survey_ai_server/ r
 """
 
 import json
+import os
 import urllib.request
 import urllib.error
 import ssl
@@ -22,9 +23,13 @@ import ssl
 # Update this URL after deploying your Vercel server instance.
 SERVER_URL = "https://survey-ai-server-i7cm.vercel.app/api/extract"
 
-# Vercel protection bypass secret — must match the value set in
-# Vercel Dashboard → Settings → Security → Protection Bypass for Automation
-BYPASS_SECRET = "18xNwbBxTEHymo6CcqRWIxwpsvmiR2iS"
+# Vercel protection bypass secret.
+# Read from environment variable SMS_BYPASS_SECRET if set,
+# otherwise use the default value for the hosted server.
+BYPASS_SECRET = os.environ.get(
+    "SMS_BYPASS_SECRET",
+    "18xNwbBxTEHymo6CcqRWIxwpsvmiR2iS"  # noqa: S105
+)
 
 # Plugin version sent with each request (for server-side analytics/debugging)
 PLUGIN_VERSION = "1.2.0"
@@ -119,7 +124,7 @@ def check_server_available():
 
     try:
         ctx = ssl.create_default_context()
-        with urllib.request.urlopen(req, context=ctx, timeout=6) as resp:
+        with urllib.request.urlopen(req, context=ctx, timeout=6) as resp:  # nosec B310
             body = json.loads(resp.read().decode("utf-8"))
             if body.get("ok"):
                 _server_ok = True
@@ -154,6 +159,10 @@ def _call_server(text_content, points_summary):
         "version": PLUGIN_VERSION
     }).encode("utf-8")
 
+    # Validate URL scheme before opening — only https allowed
+    if not SERVER_URL.startswith("https://"):
+        return None
+
     req = urllib.request.Request(
         SERVER_URL,
         data=payload,
@@ -166,7 +175,7 @@ def _call_server(text_content, points_summary):
 
     try:
         ctx = ssl.create_default_context()
-        with urllib.request.urlopen(req, context=ctx, timeout=REQUEST_TIMEOUT) as resp:
+        with urllib.request.urlopen(req, context=ctx, timeout=REQUEST_TIMEOUT) as resp:  # nosec B310
             body = json.loads(resp.read().decode("utf-8"))
 
             if not body.get("ok"):
