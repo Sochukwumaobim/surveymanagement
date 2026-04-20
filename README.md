@@ -1,419 +1,293 @@
-# Survey Management System - QGIS Plugin
+# Survey Management System — QGIS Plugin for Nigerian Cadastral Records
+
+> A published QGIS plugin for digitising, archiving, and managing Nigerian land survey records — with AutoCAD DXF import, AI-powered metadata extraction, PostGIS spatial storage, traverse calculations, and three-tier access control.
 
 [![QGIS Plugin](https://img.shields.io/badge/QGIS-Plugin-3c9e3c?logo=qgis)](https://plugins.qgis.org/plugins/surveymanagement/)
+[![Version](https://img.shields.io/badge/Version-1.2.0-blue)](https://github.com/Sochukwumaobim/surveymanagement/releases)
 [![License: GPL v2](https://img.shields.io/badge/License-GPL%20v2-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
 [![QGIS Version](https://img.shields.io/badge/QGIS-3.28%2B-brightgreen)](https://qgis.org)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-12%2B-336791?logo=postgresql)](https://www.postgresql.org)
-[![PostGIS](https://img.shields.io/badge/PostGIS-3.0%2B-1f5c2e?logo=postgresql)](https://postgis.net)
-
-> **A complete digital archiving solution for Nigerian survey records**
+[![PostGIS](https://img.shields.io/badge/PostGIS-3.0%2B-1f5c2e)](https://postgis.net)
 
 ---
 
-## 📺 **Video Tutorials**
+## 🏛️ Overview
 
-### 🎬 **Complete Plugin Walkthrough** (10 min)
-[![Watch the video]([https://img.youtube.com/vi/YOUR_VIDEO_ID/maxresdefault.jpg)](https://youtu.be/YOUR_VIDEO_ID](https://www.youtube.com/watch?v=FbWThtaPlUI))
-*Click image to watch on YouTube*
+The **Survey Management System** is a full-featured QGIS plugin built specifically for **Nigerian surveyors and cadastral offices** to replace paper-based filing systems with a robust, spatially-aware digital archive. It connects QGIS directly to a PostgreSQL/PostGIS database, enabling surveyors to store, retrieve, visualise, and verify land survey records — with 50-year archival durability and full audit trails.
 
+Now in **version 1.2.0**, the plugin adds AutoCAD DXF/DWG import with AI-powered plan metadata extraction, making it possible to onboard legacy paper plans at scale.
 
----
+### 🗺️ The Problem It Solves
 
-## 📋 **Table of Contents**
-
-- [Overview](#overview)
-- [Features](#features)
-- [Installation](#installation)
-- [Quick Start Guide](#quick-start-guide)
-- [Nigerian Surveying Standards](#nigerian-surveying-standards)
-- [Database Schema](#database-schema)
-- [Document Management](#document-management)
-- [Search Capabilities](#search-capabilities)
-- [Troubleshooting](#troubleshooting)
-- [Contributing](#contributing)
-- [License](#license)
-- [Support](#support)
+Land survey records in Nigeria are overwhelmingly paper-based. Files deteriorate, get lost, or become impossible to search across thousands of records. There is no standard digital system for linking survey plans to spatial geometries, LGA boundaries, or adjoining plots. This plugin provides a complete, open-source solution built on tools surveyors already use — QGIS and PostgreSQL.
 
 ---
 
-## 📖 **Overview**
+## ✨ What's New in v1.2.0 (April 2026)
 
-The **Survey Management System** is a powerful QGIS plugin designed specifically for Nigerian surveyors to digitize, manage, and preserve survey records for 50+ years. It transforms traditional paper-based filing systems into a robust digital database integrated with QGIS and PostgreSQL/PostGIS.
-
-### **Why This Plugin?**
-
-| Challenge | Solution |
-|-----------|----------|
-| 📁 Paper files deteriorate over time | 🗄️ Digital archive with 50-year durability |
-| ⏰ Hours searching for old surveys | 🔍 Find any survey in seconds |
-| 🗺️ Can't visualize where surveys are | 📍 Plot directly on QGIS map |
-| 📄 Scanned documents get lost | ✅ MD5 checksum verification |
-| 🔄 Multiple coordinate systems | 🇳🇬 Nigerian CRS presets |
-| 📐 Complex bearing calculations | 🧮 Automatic traverse calculator |
-
----
-
-## ✨ **Features**
-
-### 📋 **Survey Metadata Management**
-- Store plan numbers, owner names, survey dates, and surveyor details
-- Track location by LGA and State (all 36 Nigerian states + FCT)
-- Add notes and descriptions
-- Automatic timestamp and audit trail
-
-### 📍 **Coordinate Input**
-- Direct Easting/Northing entry
-- Plot points directly on QGIS map
-- Automatic boundary polygon creation
-- Area calculation using shoelace formula
-
-### 📐 **Bearing & Distance Traverse**
-- Support for Whole Circle Bearings (0-360°) - Nigerian standard
-- Quadrant bearing format (NE, SE, SW, NW)
-- DMS input (Degrees/Minutes/Seconds) - No degree symbol needed!
-- Three input methods: Spin boxes, Text with shortcuts, Decimal degrees
-- Real-time coordinate calculation
-- Closing error computation
-- Plot traverse directly on map
-
-### 📄 **Document Management**
-- Upload multiple documents per survey
-- MD5 checksum verification for file integrity
-- Primary document flag
-- Last-verified date tracking
-- Open documents directly from plugin
-- Supports PDF, images, and any file type
-
-### 🔍 **Search Capabilities**
-- **Basic Search**: Search across all fields with sorting
-- **Advanced Search**: Multiple criteria (plan, owner, surveyor, LGA, state, date range)
-- **Global Search**: Search across ALL database tables (surveys, points, documents, traverses)
-- **Quick Filters**: Recent surveys, no documents, Lagos State, FCT Abuja
-- Export results to CSV
-
-### 🗄️ **PostgreSQL/PostGIS Integration**
-- Automatic database creation
-- Automatic table creation (6 tables)
-- SRID preservation for all geometries
-- Load spatial tables directly as QGIS layers
-- Browse all database tables with preview
-- Background loading - no UI freeze
-
-### 🇳🇬 **Nigerian-Specific Features**
-- **CRS Presets**:
-  - EPSG:26331 - Minna / Nigeria West
-  - EPSG:26332 - Minna / Nigeria Mid Belt (Default)
-  - EPSG:26333 - Minna / Nigeria East
-  - EPSG:32631 - WGS 84 / UTM zone 31N
-  - EPSG:32632 - WGS 84 / UTM zone 32N
-- All 36 Nigerian states + FCT in dropdown
-- Local Government Area field
-- Custom EPSG input
-
-### 🪟 **User Experience**
-- **Non-Modal Window** - Work in QGIS while plugin stays open
-- Minimize to system tray
-- Always-on-top option
-- Status bar messages (no annoying popups)
-- Progress indicators for long operations
+- 🆕 **AutoCAD DXF/DWG Import** — extract beacon coordinates, traverse legs, bearings, and distances directly from AutoCAD plan files
+- 🆕 **AI-Powered Metadata Extraction** — automatically reads plan number, owner name, surveyor, LGA, state, and survey date from DXF files via a hosted inference server (no API key needed)
+- 🆕 **DXF Import Preview Dialog** — review and confirm all extracted data before committing to the database
+- 🆕 **First-Run Setup Wizard** — installs `psycopg2` and creates the database automatically; no command line required
+- 🆕 **User Login & Three-Tier Access Control** — superuser, surveyor, and viewer roles
+- 🆕 **Full Audit Trail** — every action logged to `audit_log` with timestamp and user
+- 🆕 **User Administration Panel** — manage users and roles from within the plugin
+- 🆕 **Traverse Precision Ratio** — automatic 1:5000 closing error check per Nigerian Survey Regulations
+- 🆕 **Adjoining Survey Detection** — PostGIS `ST_DWithin` flags neighbouring plots automatically
+- 🆕 **Live EPSG Validation** — custom CRS input with real-time validation
+- 🐛 Fixed traverse delete button index bug
+- 🐛 Fixed Documents tab index using `indexOf()`
 
 ---
 
-## 📥 **Installation**
+## 🌟 Key Features
 
-### **Prerequisites**
+### 📐 Survey Data Entry & Traverse Calculation
+- Enter survey points by direct Easting/Northing or via **Bearing & Distance traverse**
+- Support for **Whole Circle Bearings (WCB)** — the Nigerian surveying standard
+- Quadrant bearings (N45°30'E format) and **DMS text shortcuts** (`45d30m15s`)
+- Real-time traverse coordinate calculation and closing error computation
+- Automatic **1:5000 precision ratio check** per Nigerian Survey Regulations
+- Plot traverses directly on the QGIS map canvas
 
-| Software | Version | Purpose |
-|----------|---------|---------|
-| QGIS | 3.28+ | GIS platform |
-| PostgreSQL | 12+ | Database |
-| PostGIS | 3.0+ | Spatial extension |
+### 🏗️ AutoCAD DXF Import with AI Extraction
+- Import `.dxf` and `.dwg` plan files from AutoCAD or compatible CAD software
+- AI automatically extracts plan number, owner name, surveyor, LGA, state, and survey date
+- Preview dialog to review, edit, and confirm before database insertion
+- Eliminates manual data entry for legacy plan digitisation workflows
 
-### **Option 1: Install from QGIS Plugin Repository (Recommended)**
+### 🗄️ PostgreSQL/PostGIS Spatial Database
+- Automatic database creation and schema initialisation (8 tables)
+- All geometries stored with SRID preservation via `geoalchemy2`
+- `ST_DWithin` adjoining survey boundary detection
+- `ST_AsGeoJSON` and `ST_Transform` for seamless QGIS layer loading
+- Export search results to CSV
+
+### 🔍 Multi-Level Search
+- **Basic Search** — find records across all fields (plan number, owner, LGA, state, date range)
+- **Advanced Search** — multiple simultaneous criteria with sorting
+- **Global Search** — search across all database tables at once
+- Quick filters: Recent surveys, no documents, Lagos State, FCT Abuja
+
+### 📄 Document Management & File Integrity
+- Attach PDFs, scanned images, and any file type to survey records
+- **MD5 checksum verification** — detect file corruption or tampering
+- Primary document flag per survey
+- Last-verified date tracking and bulk verification
+
+### 🔐 Access Control & Audit Trail
+- Three roles: **Superuser**, **Surveyor**, **Viewer**
+- Full audit log of every insert, update, and delete action with timestamps
+- User administration panel for superusers
+- Default credentials: `admin` / `admin123` (change on first login)
+
+### 🇳🇬 Nigerian-Specific Configuration
+- **CRS Presets** built in:
+  - EPSG:26331 — Minna / Nigeria West
+  - EPSG:26332 — Minna / Nigeria Mid Belt *(default for most of Nigeria)*
+  - EPSG:26333 — Minna / Nigeria East
+  - EPSG:4326 — WGS 84 (GPS)
+  - EPSG:32631 / 32632 — UTM Zone 31N / 32N
+- All **36 Nigerian states + FCT** in dropdown
+- **Local Government Area (LGA)** field on every record
+- Designed around **NIS (Nigerian Institution of Surveyors)** workflow standards
+
+---
+
+## 📥 Installation
+
+### Requirements
+
+| Software | Minimum Version | Purpose |
+|----------|----------------|---------|
+| [QGIS](https://qgis.org/en/site/forusers/download.html) | 3.28 | GIS platform |
+| [PostgreSQL](https://www.postgresql.org/download/) | 12 | Spatial database |
+| [PostGIS](https://postgis.net/install/) | 3.0 | Geometry storage & queries |
+
+### Option 1: Install from QGIS Plugin Repository *(Recommended)*
 
 1. Open QGIS
 2. Go to **Plugins → Manage and Install Plugins**
-3. Search for **"Survey Management System"**
+3. Search for **`Survey Management System`**
 4. Click **Install Plugin**
-5. Click the plugin icon 🏛️ in the toolbar
+5. The 🏛️ icon will appear in your QGIS toolbar
 
-### **Option 2: Install from ZIP**
+### Option 2: Install from ZIP
 
-1. Download the latest release from [GitHub Releases](https://github.com/Sochukwumaobim/surveymanagement/releases)
+1. Download the latest ZIP from [GitHub Releases](https://github.com/Sochukwumaobim/surveymanagement/releases)
 2. In QGIS: **Plugins → Manage and Install Plugins → Install from ZIP**
-3. Select the downloaded ZIP file
-4. Click **Install Plugin**
+3. Select the downloaded file and click **Install Plugin**
 
-### **First-Time Database Setup**
+### First Run
 
-The plugin will automatically:
+On first launch the **Setup Wizard** will:
+1. Automatically install `psycopg2` if missing (no terminal needed)
+2. Prompt for PostgreSQL connection details
+3. Create the `survey_management` database
+4. Enable the PostGIS extension
+5. Create all required spatial tables
+6. Encrypt and save your connection credentials
 
-1. Prompt for PostgreSQL connection details on first run
-2. Create the `survey_management` database if it doesn't exist
-3. Enable PostGIS extension
-4. Create all 6 required tables
-5. Save your connection settings (encrypted)
-
-**What you need to enter:**
-- **Host**: `localhost` (or your database server IP)
-- **Port**: `5432` (default PostgreSQL port)
-- **Username**: `postgres` (or your PostgreSQL username)
-- **Password**: Your PostgreSQL password
-
-> 💡 **Tip**: Use the `postgres` superuser for automatic setup. Your password is encrypted by QGIS.
+> **Default login:** username `admin`, password `admin123` — change this immediately via the User Administration panel.
 
 ---
 
-## 🚀 **Quick Start Guide**
+## 🚀 Quick Start
 
-### **1. Create Your First Survey**
+### Create a Survey Record
 
-1. Click the plugin icon 🏛️
-2. Select your CRS (default EPSG:26332 works for most of Nigeria)
-3. Go to **Survey Metadata** tab
-4. Enter Plan Number and Owner Name (required)
-5. Fill in other details as needed
-6. Click **"Save New Survey"**
+1. Click the 🏛️ plugin icon in the QGIS toolbar
+2. Log in with your credentials
+3. Open the **Survey Metadata** tab
+4. Enter Plan Number and Owner Name (required fields)
+5. Select State, LGA, and Survey Date
+6. Click **Save New Survey**
 
-### **2. Add Coordinates (Method A - Direct Entry)**
+### Import from AutoCAD DXF
 
-1. Go to **Coordinate Input** tab
-2. Enter Easting and Northing for each point
-3. Add descriptions if desired
-4. Click **"Add Point"** for each point
-5. Click **"Plot Points"** to verify on map
-6. Click **"Save to PostGIS"**
+1. Go to the **DXF Import** tab
+2. Click **Browse** and select your `.dxf` or `.dwg` file
+3. The AI engine extracts plan metadata automatically
+4. Review the **Import Preview** dialog — edit any fields as needed
+5. Click **Confirm Import** — coordinates, traverse legs, and metadata are saved
 
-### **3. Add Traverse (Method B - Bearing & Distance)**
+### Add a Traverse Manually
 
-1. Go to **Bearing/Distance** tab
-2. Enter starting point coordinates
-3. Choose bearing input method (Spin boxes, Text, or Decimal)
-4. Enter bearing (e.g., `45d30m15s` or `45.5042`)
-5. Enter distance in meters
-6. Click **"Add Leg"** for each leg
-7. Click **"Calculate"** to verify
-8. Click **"Plot on Map"** to visualize
-9. Click **"Save to Database"**
+1. Go to the **Bearing/Distance** tab
+2. Enter the starting point coordinates (Easting, Northing)
+3. Select bearing format: **Spin boxes**, **Text shortcuts**, or **Decimal degrees**
+4. Enter each leg: bearing (e.g. `45d30m15s`) and distance in metres
+5. Click **Add Leg** after each entry
+6. Click **Calculate** — the 1:5000 precision ratio is checked automatically
+7. Click **Plot on Map** to verify, then **Save to Database**
 
-### **4. Upload Documents**
+### Search for a Record
 
-1. Go to **Documents** tab
-2. Click **"Browse"** to select your PDF or image
-3. Add a description
-4. Check **"Set as primary document"** if this is the main survey plan
-5. Click **"Upload Document"**
-
-### **5. Find an Existing Survey**
-
-**Basic Search:**
-1. Go to **Survey Metadata** tab
-2. Enter search term (plan number, owner, etc.)
-3. Click **"Search"**
-4. Double-click any result to load
-
-**Global Search (across all tables):**
-1. Go to **Global Search** tab
-2. Enter search term
-3. Select which tables to search
-4. Click **"Search All Tables"**
+- **Basic:** Enter any text → click **Search**
+- **Advanced:** Use multi-field queries with date ranges
+- **Global:** Search across surveys, points, documents, and traverses simultaneously
+- Double-click any result to load the full record
 
 ---
 
-## 🇳🇬 **Nigerian Surveying Standards**
+## 🗄️ Database Schema
 
-### **Coordinate Reference Systems**
+The plugin creates and manages the following tables in the `survey_management` database:
 
-| Region | EPSG Code | Name |
-|--------|-----------|------|
-| Nationwide (Default) | **26332** | Minna / Nigeria Mid Belt |
+| Table | Contents |
+|-------|----------|
+| `surveys` | Plan numbers, owner names, surveyors, LGA, state, survey dates |
+| `survey_points` | Individual beacon coordinates with PostGIS geometry |
+| `survey_boundaries` | Polygon boundaries with calculated area (shoelace formula) |
+| `survey_documents` | File paths, MD5 checksums, primary document flags |
+| `survey_traverses` | Traverse records with precision ratio and closing error |
+| `traverse_legs` | Individual legs with bearings, distances, and geometry |
+| `audit_log` | Full action audit trail with timestamps and user IDs |
+| `users` | User accounts with hashed passwords and role assignments |
+
+---
+
+## 🇳🇬 Nigerian Surveying Standards Reference
+
+### Coordinate Reference Systems
+
+| Region | EPSG | Name |
+|--------|------|------|
+| Nationwide *(default)* | **26332** | Minna / Nigeria Mid Belt |
 | Western Nigeria | 26331 | Minna / Nigeria West |
 | Eastern Nigeria | 26333 | Minna / Nigeria East |
-| GPS Devices | 4326 | WGS 84 |
+| GPS / GIS general | 4326 | WGS 84 |
 | UTM Zone 31N | 32631 | WGS 84 / UTM zone 31N |
 | UTM Zone 32N | 32632 | WGS 84 / UTM zone 32N |
 
-### **Bearing Formats**
+### Bearing Formats Supported
 
-**Whole Circle Bearing (WCB)** - Standard Nigerian practice:
-- 0° = North
-- 90° = East
-- 180° = South
-- 270° = West
-
-**Quadrant Format** (also supported):
-- N45°30'E = 45°30'
-- S45°30'E = 134°30'
-- S45°30'W = 225°30'
-- N45°30'W = 314°30'
-
-### **Text Entry Shortcuts for Bearings**
-
-| You Type | Means |
-|----------|-------|
+| You Type | Parsed As |
+|----------|-----------|
 | `45d30m15s` | 45°30'15" |
 | `45°30'15"` | 45°30'15" |
-| `45.5042` | 45.5042° |
-| `N45d30mE` | North 45°30' East |
-| `S30d15mW` | South 30°15' West |
+| `45.5042` | 45.5042° decimal |
+| `N45d30mE` | North 45°30' East (quadrant) |
+| `S30d15mW` | South 30°15' West (quadrant) |
 
-> 💡 Just type `d` for degrees, `m` for minutes, `s` for seconds - no degree symbol needed!
-
----
-
-## 🗄️ **Database Schema**
-
-The plugin creates 6 tables in your `survey_management` database:
-
-### **surveys**
-Main survey registry with metadata (plan numbers, owners, dates, locations)
-
-### **survey_points**
-Individual survey points with geometry, descriptions, and raw coordinates
-
-### **survey_boundaries**
-Plot boundaries as polygons with calculated area
-
-### **survey_documents**
-Document management with file paths, checksums, and verification dates
-
-### **survey_traverses**
-Traverse information linking to start points
-
-### **traverse_legs**
-Individual traverse legs with bearings, distances, and geometry
+**Precision standard:** 1:5000 closing error ratio per Nigerian Survey Regulations (NIS).
 
 ---
 
-## 📄 **Document Management**
+## 🔧 Troubleshooting
 
-### **File Integrity Verification**
+| Problem | Fix |
+|---------|-----|
+| `psycopg2 not installed` | Run the Setup Wizard — it installs this automatically. Or: `python -m pip install psycopg2-binary` in OSGeo4W Shell |
+| Cannot connect to database | Confirm PostgreSQL is running; verify host, port, username, and password |
+| Permission denied creating database | Use the `postgres` superuser, or grant `CREATEDB` to your user |
+| PostGIS not available | Windows: install via Stack Builder. Linux: `sudo apt install postgis` |
+| Nothing plots on map | Check CRS matches your data; right-click layer → Zoom to Layer |
+| Bearing parse error | Use format `45d30m15s` or decimal degrees |
+| DXF import finds no data | Ensure the file uses standard AutoCAD layer names; contact support for non-standard plans |
 
-Every document uploaded gets an MD5 checksum (digital fingerprint). The plugin can verify files haven't been tampered with or corrupted.
-
-**To verify documents:**
-1. Load a survey
-2. Go to **Documents** tab
-3. Click **"Verify All"** or verify individual documents
-
-### **Primary Documents**
-
-Mark one document per survey as primary (e.g., the main survey plan). Primary documents are highlighted in the list.
-
-### **File Storage**
-
-Documents are stored on your file system (local or network). The plugin stores file paths in the database, not the files themselves.
+For detailed errors, open the **QGIS Python Console** (Plugins → Python Console).
 
 ---
 
-## 🔍 **Search Capabilities**
+## 📚 Documentation & Resources
 
-### **What You Can Search For**
-
-| Table | Fields |
-|-------|--------|
-| **Surveys** | Plan Number, Owner Name, Surveyor, LGA, State, Notes, Survey ID |
-| **Points** | Description, Notes, Raw Coordinates, Point Number |
-| **Documents** | File Name, Description, File Path |
-| **Boundaries** | Verified status |
-| **Traverses** | Traverse Name, Notes |
-
-### **Search Examples**
-
-- Find all surveys by `Chief Okonkwo`
-- Find all points with `Boundary` in description
-- Find all documents containing `survey plan`
-- Find all surveys in `Lagos` state from `2024`
+- 📖 [Full User Manual (Google Docs)](https://docs.google.com/document/d/1PZ1Gvf_fzbpQL_uH3iHdavKOnUAtGRFA/edit?usp=drive_link)
+- 🎬 [Video Walkthrough on YouTube](https://www.youtube.com/watch?v=FbWThtaPlUI)
+- 🐛 [Report a Bug on GitHub](https://github.com/Sochukwumaobim/surveymanagement/issues)
+- 🔌 [QGIS Plugin Repository Listing](https://plugins.qgis.org/plugins/surveymanagement/)
 
 ---
 
-## 🔧 **Troubleshooting**
+## 🤝 Contributing
 
-### **Common Issues**
+Contributions are welcome from the QGIS community and Nigerian GIS practitioners:
 
-| Issue | Solution |
-|-------|----------|
-| **"psycopg2 not installed"** | Run in OSGeo4W Shell: `python -m pip install psycopg2-binary` |
-| **"Cannot connect to database"** | Check PostgreSQL is running, verify credentials |
-| **"Permission denied to create database"** | Use `postgres` superuser or grant CREATE DATABASE permission |
-| **"PostGIS not installed"** | Install PostGIS via Stack Builder (Windows) or `sudo apt install postgis` |
-| **Nothing plots on map** | Check CRS matches your data, right-click layer → Zoom to Layer |
-| **Bearing parse error** | Use format like `45d30m15s` or decimal degrees |
-
-### **Getting Help**
-
-1. Check the **QGIS Python Console** for detailed error messages
-2. Visit the [GitHub Issues](https://github.com/Sochukwumaobim/surveymanagement/issues)
-3. Email support: ugwusochukwuma@gmail.com
-
----
-
-## 🤝 **Contributing**
-
-Contributions are welcome! Here's how you can help:
-
-1. **Report bugs** - Open an issue on GitHub
-2. **Suggest features** - Tell us what you need
-3. **Improve documentation** - Fix typos, add examples
-4. **Translate** - Add translations for Hausa, Yoruba, Igbo
-5. **Code contributions** - Submit pull requests
-
-### **Development Setup**
-
+- **Report bugs** — open a [GitHub Issue](https://github.com/Sochukwumaobim/surveymanagement/issues)
+- **Request features** — describe your surveying workflow requirement
+- **Translate** — add Hausa, Yoruba, or Igbo UI translations
+- **Improve DXF parsing** — extend support for more CAD plan formats
+- **Port to other countries** — Ghana, Kenya, and other nations using WCB traverse standards
 
 ```bash
-# Clone the repository
+# Development setup
 git clone https://github.com/Sochukwumaobim/surveymanagement.git
-
-# Install development dependencies
 pip install qgis-plugin-ci
-
-# Package for testing
-qgis-plugin-ci package
-
-# Reload plugin in QGIS using Plugin Reloader
+qgis-plugin-ci package        # Build the plugin zip
+# Load in QGIS using Plugin Reloader for live development
 ```
 
-### **📜 License**
+---
 
-This plugin is released under the GNU General Public License v2 or later.
+## 📜 License
 
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation; either version 2 of the License, or any later version.
+Released under the **GNU General Public License v2 or later (GPL-2.0+)** — free software you may use, modify, and redistribute. See [LICENSE](./LICENSE) for full terms.
 
 ---
-###🙏 Acknowledgments
-Nigerian Institution of Surveyors for guidance
 
-Testers who provided valuable feedback
+## 🙏 Acknowledgements
 
-QGIS community for excellent documentation
-
-PostgreSQL/PostGIS team for spatial database
-
----
-###📞 Support
-Contact	Information
-
-Email	ugwusochukwuma@gmail.com
-
-GitHub Issues	Report Bug
-
-QGIS Repository	plugins.qgis.org/plugins/surveymanagement
-
-Author	ASTROMAT GEO-SERVICES
+- [Nigerian Institution of Surveyors (NIS)](https://www.nigeriansurveyors.com/) for workflow and standards guidance
+- The [QGIS community](https://qgis.org) for an outstanding open-source GIS platform
+- [PostgreSQL](https://www.postgresql.org) and [PostGIS](https://postgis.net) teams
+- Datamat Nigeria Limited
+- All field surveyors who provided feedback during testing
 
 ---
-###🌟 Star the Project
-If you find this plugin useful, please:
 
-⭐ Star it on GitHub
+## 📞 Support
 
-📝 Leave a review on the QGIS plugin repository
-
-🔄 Share with fellow surveyors
+| Channel | Details |
+|---------|---------|
+| Email | [ugwusochukwuma@gmail.com](mailto:ugwusochukwuma@gmail.com) |
+| GitHub Issues | [github.com/Sochukwumaobim/surveymanagement/issues](https://github.com/Sochukwumaobim/surveymanagement/issues) |
+| QGIS Repository | [plugins.qgis.org/plugins/surveymanagement](https://plugins.qgis.org/plugins/surveymanagement/) |
+| Author | ASTROMAT GEO-SERVICES |
 
 ---
-```
-"Preserving Nigeria's surveying heritage, one coordinate at a time." 🇳🇬
+
+> *"Preserving Nigeria's surveying heritage, one coordinate at a time."* 🇳🇬
+
+---
+
+*Keywords: QGIS plugin Nigeria, Nigerian cadastral survey management, land survey digitisation Nigeria, PostGIS survey records, QGIS Nigeria cadastral, survey plan archive Nigeria, bearing traverse calculator QGIS, Minna coordinate system EPSG 26332, Nigerian land registry GIS, AutoCAD DXF QGIS import, land administration Nigeria open source, survey management system Africa*
