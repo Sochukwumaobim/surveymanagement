@@ -505,26 +505,31 @@ class BearingInputWidget(QWidget):
 class SurveyManagementDialog(QDialog, FORM_CLASS):
     """Main dialog for Survey Management System"""
     
-    def __init__(self, parent=None, db_connection=None):
+    def __init__(self, parent=None, db_connection=None, session_user=None):
         """Constructor."""
         super(SurveyManagementDialog, self).__init__(parent)
-        
+
         # Set up the user interface from Designer
         self.setupUi(self)
-        
+
         # Store database connection
         self.db_connection = db_connection
+        self.session_user  = session_user or {"username": "guest", "role": "viewer", "user_id": None}
         self.current_survey_id = None
         self.current_srid = 26332  # Default to Nigeria Mid Belt
-        self.pdf_base_path = "C:\\SurveyRecords\\"  # Default base path for PDFs
+        self.pdf_base_path = "C:\\SurveyRecords\\"
         self.minimize_to_tray = True
         self.tray_icon = None
         self.table_data = None
-        self.all_surveys = []  # Store all surveys for filtering
-        self.global_survey_results = []  # For global search survey results
-        self.global_point_results = []   # For global search point results
-        self.global_doc_results = []     # For global search document results
-        
+        self.all_surveys = []
+        self.global_survey_results = []
+        self.global_point_results  = []
+        self.global_doc_results    = []
+
+        # Tab widget references (set in setup methods, used for safe indexOf)
+        self._documents_tab_widget = None
+        self._traverse_tab_widget  = None
+
         # Store reference to iface
         self.iface = parent
         
@@ -534,7 +539,9 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
                             not db_connection.closed)
         
         # Set window properties - NON-MODAL TOOL WINDOW
-        self.setWindowTitle("Survey Management System - Nigerian Survey Records")
+        role  = self.session_user.get("role", "viewer")
+        uname = self.session_user.get("username", "guest")
+        self.setWindowTitle(f"Survey Management System  |  {uname}  [{role.upper()}]")
         self.setMinimumWidth(1200)
         self.setMinimumHeight(800)
         
@@ -585,6 +592,49 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
         """Show message in status bar instead of popup"""
         self.status_bar.showMessage(message, timeout)
 
+    # ------------------------------------------------------------------
+    # Access control helpers
+    # ------------------------------------------------------------------
+
+    def require_role(self, minimum_role):
+        """Return True if the current session user meets the minimum role.
+        Roles in ascending order: viewer < surveyor < superuser."""
+        hierarchy = {'viewer': 0, 'surveyor': 1, 'superuser': 2}
+        user_level     = hierarchy.get(self.session_user.get('role', 'viewer'), 0)
+        required_level = hierarchy.get(minimum_role, 99)
+        if user_level < required_level:
+            QMessageBox.warning(
+                self, "Access Denied",
+                f"This action requires '{minimum_role}' access.\n\n"
+                f"Your current role: {self.session_user.get('role', 'viewer')}"
+            )
+            return False
+        return True
+
+    def write_audit(self, action, table_name=None, record_id=None,
+                    old_values=None, new_values=None):
+        """Write a row to audit_log. Silently skips if DB not available."""
+        if not self.db_available:
+            return
+        try:
+            self.db_connection.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+            cur = self.db_connection.cursor()
+            cur.execute("""
+                INSERT INTO audit_log
+                    (user_id, username, action, table_name,
+                     record_id, old_values, new_values)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (
+                self.session_user.get("user_id"),
+                self.session_user.get("username"),
+                action, table_name, record_id,
+                str(old_values) if old_values else None,
+                str(new_values) if new_values else None
+            ))
+            cur.close()
+        except Exception as e:
+            print(f"[Audit] write_audit: {e}")
+
     def create_tray_icon(self):
         """Create system tray icon for background operation"""
         # Check if system tray is supported
@@ -626,6 +676,20 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
         self.showNormal()
         self.raise_()
         self.activateWindow()
+
+    def _open_user_admin(self):
+        """Open the user administration dialog (superuser only)."""
+        if self.session_user.get("role") != "superuser":
+            QMessageBox.warning(self, "Access Denied",
+                                "User Administration requires superuser access.")
+            return
+        try:
+            from .user_admin_dialog import UserAdminDialog
+            dlg = UserAdminDialog(self, db_connection=self.db_connection,
+                                  session_user=self.session_user)
+            dlg.exec_()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Could not open User Admin:\n{str(e)}")
 
     def changeEvent(self, event):
         """Handle window state changes"""
@@ -738,7 +802,29 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
         title.setStyleSheet("font-size: 16pt; font-weight: bold; color: #2c3e50;")
         header_layout.addWidget(title)
         header_layout.addStretch()
-        
+
+        # Logged-in user badge
+        role  = self.session_user.get("role", "viewer")
+        uname = self.session_user.get("full_name") or self.session_user.get("username", "guest")
+        role_colors = {"superuser": "#8e44ad", "surveyor": "#27ae60", "viewer": "#2980b9"}
+        role_color  = role_colors.get(role, "#2980b9")
+        user_lbl = QLabel(f"👤  {uname}  [{role.upper()}]")
+        user_lbl.setStyleSheet(
+            f"color:{role_color}; font-weight:bold; font-size:10pt; "
+            "background:#f0f0f0; padding:4px 10px; border-radius:4px;"
+        )
+        header_layout.addWidget(user_lbl)
+
+        # User admin shortcut (superusers only)
+        if role == "superuser":
+            admin_btn = QPushButton("👥 User Admin")
+            admin_btn.setStyleSheet(
+                "background-color:#8e44ad; color:white; font-weight:bold;"
+                " padding:4px 10px; border-radius:4px;"
+            )
+            admin_btn.clicked.connect(self._open_user_admin)
+            header_layout.addWidget(admin_btn)
+
         # Database status
         if self.db_available:
             status_text = "✅ DATABASE CONNECTED"
@@ -746,12 +832,12 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
         else:
             status_text = "⚠️ OFFLINE MODE"
             status_color = "orange"
-        
+
         status_label = QLabel(status_text)
         status_label.setStyleSheet(f"color: {status_color}; font-weight: bold;")
         header_layout.addWidget(status_label)
         main_layout.addLayout(header_layout)
-        
+
         # Separator
         separator = QLabel()
         separator.setFrameStyle(QLabel.HLine)
@@ -784,7 +870,21 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
         self.custom_crs.setPlaceholderText("Enter EPSG code (e.g., 26332)")
         self.custom_crs.setEnabled(False)
         self.custom_crs.setMaximumWidth(150)
+        self.custom_crs.textChanged.connect(self._on_custom_crs_changed)
         crs_layout.addWidget(self.custom_crs)
+
+        self.custom_crs_apply_btn = QPushButton("Apply")
+        self.custom_crs_apply_btn.setMaximumWidth(60)
+        self.custom_crs_apply_btn.setEnabled(False)
+        self.custom_crs_apply_btn.setStyleSheet(
+            "background-color: #1A5C38; color: white; font-weight: bold;"
+        )
+        self.custom_crs_apply_btn.clicked.connect(self._apply_custom_crs)
+        crs_layout.addWidget(self.custom_crs_apply_btn)
+
+        self.custom_crs_status = QLabel("")
+        self.custom_crs_status.setStyleSheet("font-size: 10pt;")
+        crs_layout.addWidget(self.custom_crs_status)
         
         crs_layout.addStretch()
         crs_group.setLayout(crs_layout)
@@ -873,26 +973,82 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
 
     def on_crs_changed(self, text):
         """Handle CRS selection change"""
-        self.custom_crs.setEnabled(text == "Custom EPSG (specify below)")
-        if text != "Custom EPSG (specify below)":
+        is_custom = (text == "Custom EPSG (specify below)")
+        self.custom_crs.setEnabled(is_custom)
+        self.custom_crs_apply_btn.setEnabled(is_custom)
+        self.custom_crs_status.setText("")
+
+        if not is_custom:
             try:
                 epsg_code = text.split(" - ")[0].replace("EPSG:", "")
                 self.current_srid = int(epsg_code)
+                self.show_status(f"CRS set to EPSG:{epsg_code}")
             except:
                 self.current_srid = 26332
         else:
-            self.current_srid = None
+            # Keep previous srid until user confirms custom code
+            self.custom_crs.setFocus()
+
+    def _on_custom_crs_changed(self, text):
+        """Validate EPSG code as user types."""
+        text = text.strip()
+        if not text:
+            self.custom_crs_status.setText("")
+            self.custom_crs_apply_btn.setEnabled(True)
+            return
+        try:
+            epsg = int(text)
+            crs = QgsCoordinateReferenceSystem(f"EPSG:{epsg}")
+            if crs.isValid():
+                self.custom_crs_status.setText(f"✅ {crs.description()[:35]}")
+                self.custom_crs_status.setStyleSheet("color: #1A5C38; font-size: 10pt;")
+            else:
+                self.custom_crs_status.setText("❌ Unknown EPSG code")
+                self.custom_crs_status.setStyleSheet("color: #C62828; font-size: 10pt;")
+        except ValueError:
+            self.custom_crs_status.setText("❌ Numbers only")
+            self.custom_crs_status.setStyleSheet("color: #C62828; font-size: 10pt;")
+        self.custom_crs_apply_btn.setEnabled(True)
+
+    def _apply_custom_crs(self):
+        """Apply the typed custom EPSG code."""
+        text = self.custom_crs.text().strip()
+        if not text:
+            QMessageBox.warning(self, "No EPSG Code", "Please enter an EPSG code first.")
+            return
+        try:
+            epsg = int(text)
+            crs = QgsCoordinateReferenceSystem(f"EPSG:{epsg}")
+            if crs.isValid():
+                self.current_srid = epsg
+                self.custom_crs_status.setText(f"✅ Active: {crs.description()[:35]}")
+                self.custom_crs_status.setStyleSheet(
+                    "color: #1A5C38; font-weight: bold; font-size: 10pt;"
+                )
+                self.show_status(f"Custom CRS set: EPSG:{epsg} — {crs.description()}")
+            else:
+                QMessageBox.warning(
+                    self, "Invalid EPSG Code",
+                    f"EPSG:{epsg} is not recognised by QGIS.\n\n"
+                    "Check the code at epsg.io or spatialreference.org"
+                )
+        except ValueError:
+            QMessageBox.warning(self, "Invalid Input", "Please enter numbers only.")
 
     def get_current_crs(self):
-        """Get the currently selected CRS"""
+        """Get the currently active CRS. Always returns a valid CRS."""
         if self.crs_combo.currentText() == "Custom EPSG (specify below)":
-            try:
-                epsg = int(self.custom_crs.text().strip())
-                self.current_srid = epsg
-                return QgsCoordinateReferenceSystem(f"EPSG:{epsg}")
-            except:
-                QMessageBox.warning(self, "Invalid CRS", "Please enter a valid EPSG code")
-                return None
+            if self.current_srid:
+                crs = QgsCoordinateReferenceSystem(f"EPSG:{self.current_srid}")
+                if crs.isValid():
+                    return crs
+            # Not yet applied — prompt
+            QMessageBox.warning(
+                self, "Custom CRS Not Applied",
+                "Please enter your EPSG code and click the Apply button\n"
+                "before saving coordinates."
+            )
+            return None
         else:
             text = self.crs_combo.currentText()
             epsg_code = text.split(" - ")[0].replace("EPSG:", "")
@@ -1855,7 +2011,10 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
     def show_survey_docs(self, survey_id):
         """Show documents for a survey"""
         self.load_survey_by_id(survey_id)
-        self.tab_widget.setCurrentIndex(1)  # Documents tab
+        if self._documents_tab_widget is not None:
+            idx = self.tab_widget.indexOf(self._documents_tab_widget)
+            if idx >= 0:
+                self.tab_widget.setCurrentIndex(idx)
 
     # ========== DOCUMENTS TAB ==========
     def setup_documents_tab(self):
@@ -1947,6 +2106,7 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
         
         tab.setLayout(layout)
         self.tab_widget.addTab(tab, "📄 Documents")
+        self._documents_tab_widget = tab
 
     # ========== DOCUMENT METHODS ==========
     def browse_document_file(self):
@@ -1979,15 +2139,17 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
 
     def upload_document(self):
         """Upload a document to the database"""
+        if not self.require_role('surveyor'):
+            return
         if not self.db_available:
             QMessageBox.warning(self, "No Database", "Database not connected")
             return
-        
+
         if not self.current_survey_id:
             QMessageBox.warning(self, "No Survey", "Please select or create a survey first")
             self.tab_widget.setCurrentIndex(0)
             return
-        
+
         file_path = self.doc_file_path.text().strip()
         if not file_path:
             QMessageBox.warning(self, "No File", "Please select a file to upload")
@@ -2042,10 +2204,13 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
             ))
             
             document_id = cur.fetchone()[0]
+            self.write_audit("DOC_UPLOAD", table_name="survey_documents",
+                             record_id=document_id,
+                             new_values=f"survey={self.current_survey_id} file={file_name}")
             cur.close()
-            
+
             QMessageBox.information(self, "Success", f"✅ Document uploaded successfully!")
-            
+
             self.doc_file_path.clear()
             self.doc_description.clear()
             self.doc_is_primary.setChecked(True)
@@ -2336,16 +2501,22 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
         button_group = QGroupBox("Actions")
         button_layout = QHBoxLayout()
         
+        import_dxf_btn = QPushButton("📐 Import from DXF/DWG")
+        import_dxf_btn.setStyleSheet("background-color: #1565C0; color: white; font-weight: bold; padding: 8px;")
+        import_dxf_btn.setToolTip("Import beacon coordinates directly from an AutoCAD DXF or DWG file")
+        import_dxf_btn.clicked.connect(self.import_from_dxf)
+        button_layout.addWidget(import_dxf_btn)
+
         plot_coord_btn = QPushButton("🗺️ Plot Points")
         plot_coord_btn.setStyleSheet("background-color: #9b59b6; color: white; font-weight: bold; padding: 8px;")
         plot_coord_btn.clicked.connect(self.plot_coordinates)
         button_layout.addWidget(plot_coord_btn)
-        
+
         save_coord_btn = QPushButton("💾 Save to PostGIS")
         save_coord_btn.setStyleSheet("background-color: #27ae60; color: white; font-weight: bold; padding: 8px;")
         save_coord_btn.clicked.connect(self.save_coordinates_to_postgis)
         button_layout.addWidget(save_coord_btn)
-        
+
         clear_coord_btn = QPushButton("🗑️ Clear All")
         clear_coord_btn.setStyleSheet("background-color: #e74c3c; color: white; padding: 8px;")
         clear_coord_btn.clicked.connect(self.clear_coordinate_table)
@@ -2463,7 +2634,7 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
                     else:
                         self.iface.setActiveLayer(point_layer)
                 except Exception as e:
-                    print(f"Debug - Zoom error (suppressed): {e}")
+                    pass  # zoom not available in this window state
                     try:
                         self.iface.setActiveLayer(point_layer)
                     except:
@@ -2581,6 +2752,12 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
         button_group.setStyleSheet("QGroupBox { font-weight: bold; }")
         button_layout = QHBoxLayout()
         
+        import_dxf_trav_btn = QPushButton("📐 Import from DXF/DWG")
+        import_dxf_trav_btn.setStyleSheet("background-color: #1565C0; color: white; font-weight: bold; padding: 8px;")
+        import_dxf_trav_btn.setToolTip("Extract bearing and distance legs from an AutoCAD DXF or DWG file")
+        import_dxf_trav_btn.clicked.connect(self.import_from_dxf)
+        button_layout.addWidget(import_dxf_trav_btn)
+
         self.calc_btn = QPushButton("🧮 Calculate All")
         self.calc_btn.setStyleSheet("background-color: #f39c12; color: white; font-weight: bold; padding: 8px;")
         self.calc_btn.clicked.connect(self.calculate_traverse)
@@ -2678,7 +2855,9 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
         
         delete_btn = QPushButton("❌")
         delete_btn.setMaximumWidth(30)
-        delete_btn.clicked.connect(lambda checked, r=row: self.delete_traverse_leg(r))
+        delete_btn.clicked.connect(lambda checked: self.delete_traverse_leg(
+            self.traverse_table.currentRow()
+        ))
         self.traverse_table.setCellWidget(row, 6, delete_btn)
         
         self.bearing_input.clear()
@@ -2689,6 +2868,8 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
 
     def delete_traverse_leg(self, row):
         """Delete a traverse leg"""
+        if row < 0:
+            return
         self.traverse_table.removeRow(row)
         for i in range(self.traverse_table.rowCount()):
             self.traverse_table.setItem(i, 0, QTableWidgetItem(str(i + 1)))
@@ -2751,13 +2932,27 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
                 result += f"ΔE = {dx:.3f}m, ΔN = {dy:.3f}m\n"
                 result += f"Linear Error = {error:.3f}m\n"
                 
-                if error < 0.1:
-                    result += "✅ Traverse CLOSES within tolerance (0.1m)\n"
-                elif error < 0.5:
-                    result += "⚠️ Traverse CLOSES but error > 0.1m - Check measurements\n"
+                # Total traverse perimeter
+                total_length = sum(
+                    float(self.traverse_table.item(i, 3).text())
+                    for i in range(self.traverse_table.rowCount())
+                )
+                result += f"Total Traverse Length = {total_length:.3f}m\n"
+
+                if error > 0.001:
+                    precision_ratio = int(total_length / error)
+                    result += f"Precision Ratio      = 1:{precision_ratio:,}\n"
+                    result += "-" * 60 + "\n"
+                    # Nigerian Survey Regulations: 1:5000 minimum for cadastral
+                    if precision_ratio >= 5000:
+                        result += "✅ MEETS Nigerian cadastral standard (min 1:5000)\n"
+                    elif precision_ratio >= 2000:
+                        result += "⚠️ Below cadastral standard — acceptable for general surveys only\n"
+                    else:
+                        result += "❌ FAILS minimum survey standard — re-measure\n"
                 else:
-                    result += "❌ Traverse does NOT close - Error too large\n"
-            
+                    result += "✅ Perfect closure (error < 1mm)\n"
+
             self.result_text.setText(result)
             self.show_status("Traverse calculated")
             
@@ -2841,7 +3036,7 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
                     else:
                         self.iface.setActiveLayer(line_layer)
                 except Exception as e:
-                    print(f"Debug - Zoom error (suppressed): {e}")
+                    pass  # zoom not available in this window state
                     try:
                         self.iface.setActiveLayer(line_layer)
                     except:
@@ -3176,10 +3371,12 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
     # ========== DATABASE SAVE METHODS ==========
     def save_coordinates_to_postgis(self):
         """Save coordinates to PostGIS"""
+        if not self.require_role('surveyor'):
+            return
         if not self.db_available:
             QMessageBox.warning(self, "No Database", "Database not connected")
             return
-        
+
         if not self.current_survey_id:
             reply = QMessageBox.question(self, "No Survey", "Create new survey?", QMessageBox.Yes | QMessageBox.No)
             if reply == QMessageBox.Yes:
@@ -3232,16 +3429,22 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
                 """, (self.current_survey_id, polygon_wkt, srid, area, False))
             
             cur.close()
-            
+            self.write_audit("COORD_SAVE", table_name="survey_points",
+                             record_id=self.current_survey_id,
+                             new_values=f"{self.coord_table.rowCount()} points saved")
+
             QMessageBox.information(self, "Success", f"✅ Saved {self.coord_table.rowCount()} points")
             self.show_status(f"Saved {self.coord_table.rowCount()} points to database")
-            
+            self.check_adjoining_surveys()
+
         except Exception as e:
             print(f"Error saving coordinates: {e}")
             QMessageBox.critical(self, "Database Error", str(e))
 
     def save_traverse_to_postgis(self):
         """Save traverse to PostGIS"""
+        if not self.require_role('surveyor'):
+            return
         if not self.db_available:
             QMessageBox.warning(self, "No Database", "Database not connected")
             return
@@ -3312,9 +3515,14 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
                     """, (self.current_survey_id, polygon_wkt, srid, area, False))
             
             cur.close()
+            self.write_audit("TRAVERSE_SAVE", table_name="survey_points",
+                             record_id=self.current_survey_id,
+                             new_values=f"{len(points)} traverse points saved")
+
             QMessageBox.information(self, "Success", f"✅ Saved {len(points)} traverse points")
             self.show_status(f"Saved {len(points)} traverse points to database")
-            
+            self.check_adjoining_surveys()
+
         except Exception as e:
             print(f"Error saving traverse: {e}")
             QMessageBox.critical(self, "Error", str(e))
@@ -3332,27 +3540,380 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
         
         return self.calculate_polygon_area(points)
 
+    # ========== DXF / DWG IMPORT ==========
+
+    def import_from_dxf(self):
+        """
+        Main entry point for DXF/DWG import.
+        Opens file browser → checks API key → runs extraction →
+        shows preview dialog → loads accepted data into form.
+        """
+        # Ensure ezdxf is available — installs automatically if missing
+        from .dependency_manager import ensure_ezdxf
+        ok, err_msg = ensure_ezdxf(self)
+        if not ok:
+            if err_msg and err_msg != "Installation cancelled by user.":
+                QMessageBox.critical(self, "ezdxf Required", err_msg)
+            return
+
+
+        # File browser — AI extraction runs automatically via hosted server, no key needed
+        from qgis.PyQt.QtWidgets import QFileDialog
+        filepath, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select AutoCAD DXF or DWG File",
+            "",
+            "AutoCAD Files (*.dxf *.DXF *.dwg *.DWG);;DXF Files (*.dxf);;DWG Files (*.dwg);;All Files (*.*)"
+        )
+        if not filepath:
+            return
+
+        self.show_status("Importing from DXF — please wait...")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+
+        try:
+            from .dxf_importer import DXFImporter
+            importer = DXFImporter()
+            result   = importer.import_file(filepath)
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.critical(self, "Import Error",
+                f"An unexpected error occurred during import:\n\n{str(e)}")
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        # Fatal errors — nothing to show
+        if result.errors and not result.points and not result.polylines and not result.legs:
+            QMessageBox.critical(
+                self, "Import Failed",
+                "Could not extract data from the file:\n\n" +
+                "\n".join(result.errors)
+            )
+            return
+
+        # Show preview dialog
+        try:
+            from .dxf_import_dialog import DXFImportDialog
+            dlg = DXFImportDialog(self, import_result=result, filepath=filepath)
+        except Exception as e:
+            QMessageBox.critical(self, "Dialog Error",
+                f"Could not open import preview:\n{str(e)}")
+            return
+
+        if dlg.exec_() != QDialog.Accepted:
+            return
+
+        # Store result so _apply_dxf_result can access start_point and beacon_map
+        self._last_dxf_result = result
+
+        # Apply accepted data
+        self._apply_dxf_result(
+            points   = dlg.accepted_points,
+            legs     = dlg.accepted_legs,
+            metadata = dlg.accepted_metadata
+        )
+
+    def _apply_dxf_result(self, points, legs, metadata):
+        """
+        Load DXF import data into the plugin form.
+        points   – list of {"x", "y", "desc"}
+        legs     – list of {"bearing_dms", "bearing_decimal", "distance"}
+        metadata – dict of field→value
+        """
+        loaded = []
+
+        # ── Metadata ─────────────────────────────────────────────────────────
+        if metadata:
+            def _get(keys):
+                """Get first non-empty value from a list of possible keys."""
+                for k in keys if isinstance(keys, list) else [keys]:
+                    v = metadata.get(k, "")
+                    if v and str(v).strip() not in ("", "null", "None"):
+                        return str(v).strip()
+                return ""
+
+            plan = _get("plan_number")
+            if plan:
+                self.plan_number.setText(plan)
+                loaded.append("plan number")
+
+            owner = _get(["owner", "owner_name"])
+            if owner:
+                self.owner_name.setText(owner)
+                loaded.append("owner name")
+
+            surveyor = _get(["surveyor", "surveyor_name"])
+            if surveyor:
+                self.surveyor.setText(surveyor)
+                loaded.append("surveyor name")
+
+            lga = _get("lga")
+            if lga:
+                self.lga.setText(lga)
+                loaded.append("LGA")
+
+            state = _get("state")
+            if state:
+                # Try exact match first, then case-insensitive
+                idx = self.state.findText(state, Qt.MatchFixedString)
+                if idx < 0:
+                    idx = self.state.findText(state, Qt.MatchContains)
+                if idx >= 0:
+                    self.state.setCurrentIndex(idx)
+                    loaded.append("state")
+
+            date_str = _get("survey_date")
+            if date_str:
+                from qgis.PyQt.QtCore import QDate
+                from datetime import datetime
+                for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d %B %Y", "%B %Y",
+                            "%Y-%m-%d", "%d %b %Y"]:
+                    try:
+                        dt = datetime.strptime(date_str, fmt)
+                        self.survey_date.setDate(QDate(dt.year, dt.month, dt.day))
+                        loaded.append("survey date")
+                        break
+                    except ValueError:
+                        continue
+
+            desc = _get("description")
+            if desc:
+                current_notes = self.notes.toPlainText().strip()
+                if current_notes:
+                    self.notes.setPlainText(current_notes + "\n" + desc)
+                else:
+                    self.notes.setPlainText(desc)
+                loaded.append("description/notes")
+
+            # Area — append to notes if no area field in DB
+            area_sqm = metadata.get("area_sqm")
+            area_acres = metadata.get("area_acres")
+            area_ha = metadata.get("area_hectares")
+            if area_sqm or area_acres or area_ha:
+                area_parts = []
+                if area_sqm:
+                    try:
+                        area_parts.append(f"{float(area_sqm):,.3f} sq m")
+                    except (ValueError, TypeError):
+                        pass
+                if area_acres:
+                    try:
+                        area_parts.append(f"{float(area_acres):.4f} acres")
+                    except (ValueError, TypeError):
+                        pass
+                if area_ha:
+                    try:
+                        area_parts.append(f"{float(area_ha):.4f} ha")
+                    except (ValueError, TypeError):
+                        pass
+                if area_parts:
+                    area_str = "Area: " + "  /  ".join(area_parts)
+                    current = self.notes.toPlainText().strip()
+                    self.notes.setPlainText(
+                        (current + "\n" + area_str) if current else area_str
+                    )
+                    loaded.append("area")
+
+            if loaded:
+                self.tab_widget.setCurrentIndex(0)
+
+        # ── Coordinates ───────────────────────────────────────────────────────
+        if points:
+            # Ask whether to replace or append
+            if self.coord_table.rowCount() > 0:
+                reply = QMessageBox.question(
+                    self, "Existing Coordinates",
+                    f"The coordinate table already has {self.coord_table.rowCount()} points.\n\n"
+                    "Replace all existing points with the imported data?\n\n"
+                    "• YES — clear the table and load imported points\n"
+                    "• NO  — append imported points to existing table",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes
+                )
+                if reply == QMessageBox.Yes:
+                    self.coord_table.setRowCount(0)
+
+            start_row = self.coord_table.rowCount()
+            for i, pt in enumerate(points):
+                row = start_row + i
+                self.coord_table.insertRow(row)
+                self.coord_table.setItem(row, 0, QTableWidgetItem(str(row + 1)))
+                self.coord_table.setItem(row, 1, QTableWidgetItem(f"{pt['x']:.3f}"))
+                self.coord_table.setItem(row, 2, QTableWidgetItem(f"{pt['y']:.3f}"))
+                self.coord_table.setItem(row, 3, QTableWidgetItem(pt.get("desc", "")))
+
+                delete_btn = QPushButton("❌")
+                delete_btn.setMaximumWidth(30)
+                delete_btn.clicked.connect(
+                    lambda checked, r=row: self.delete_coordinate_row(r)
+                )
+                self.coord_table.setCellWidget(row, 4, delete_btn)
+
+            loaded.append(f"{len(points)} coordinate points")
+
+            # Switch to Coordinate Input tab
+            coord_tab_idx = 2  # default position
+            for i in range(self.tab_widget.count()):
+                if "Coordinate" in self.tab_widget.tabText(i):
+                    coord_tab_idx = i
+                    break
+            self.tab_widget.setCurrentIndex(coord_tab_idx)
+
+        # ── Traverse legs ─────────────────────────────────────────────────────
+        if legs:
+            if self.traverse_table.rowCount() > 0:
+                reply = QMessageBox.question(
+                    self, "Existing Traverse",
+                    f"The traverse table already has {self.traverse_table.rowCount()} legs.\n\n"
+                    "Replace all existing legs with the imported data?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes
+                )
+                if reply == QMessageBox.Yes:
+                    self.traverse_table.setRowCount(0)
+                    self.result_text.clear()
+
+            # Auto-fill starting point from extracted beacon coordinate
+            # result.start_point is set by _sort_legs_by_points using actual P1 coordinate
+            start_point = getattr(self._last_dxf_result, 'start_point', None) \
+                          if hasattr(self, '_last_dxf_result') else None
+
+            if start_point and start_point.get('x') and start_point.get('y'):
+                self.start_easting.setText(f"{start_point['x']:.3f}")
+                self.start_northing.setText(f"{start_point['y']:.3f}")
+                label = start_point.get('label', '')
+                loaded.append(f"starting point {('(' + label + ')') if label else ''}")
+            elif not self.start_easting.text() or not self.start_northing.text():
+                # No start_point extracted — try to use first imported coordinate point
+                if points:
+                    first = points[0]
+                    self.start_easting.setText(f"{first['x']:.3f}")
+                    self.start_northing.setText(f"{first['y']:.3f}")
+                    loaded.append("starting point (from first coordinate)")
+
+            import math
+            try:
+                start_e = float(self.start_easting.text()) if self.start_easting.text() else 0.0
+                start_n = float(self.start_northing.text()) if self.start_northing.text() else 0.0
+            except ValueError:
+                start_e, start_n = 0.0, 0.0
+
+            e, n = start_e, start_n
+            # Accumulate from existing legs if appending
+            for i in range(self.traverse_table.rowCount()):
+                try:
+                    b = float(self.traverse_table.item(i, 2).text())
+                    d = float(self.traverse_table.item(i, 3).text())
+                    e += d * math.sin(math.radians(b))
+                    n += d * math.cos(math.radians(b))
+                except Exception:
+                    pass
+
+            for leg in legs:
+                bearing_decimal = leg["bearing_decimal"]
+                bearing_dms     = leg["bearing_dms"]
+                distance        = leg["distance"]
+
+                e += distance * math.sin(math.radians(bearing_decimal))
+                n += distance * math.cos(math.radians(bearing_decimal))
+
+                row = self.traverse_table.rowCount()
+                self.traverse_table.insertRow(row)
+                self.traverse_table.setItem(row, 0, QTableWidgetItem(str(row + 1)))
+                self.traverse_table.setItem(row, 1, QTableWidgetItem(bearing_dms))
+                self.traverse_table.setItem(row, 2, QTableWidgetItem(f"{bearing_decimal:.6f}"))
+                self.traverse_table.setItem(row, 3, QTableWidgetItem(f"{distance:.3f}"))
+                self.traverse_table.setItem(row, 4, QTableWidgetItem(f"{e:.3f}"))
+                self.traverse_table.setItem(row, 5, QTableWidgetItem(f"{n:.3f}"))
+
+                del_btn = QPushButton("❌")
+                del_btn.setMaximumWidth(30)
+                del_btn.clicked.connect(
+                    lambda checked: self.delete_traverse_leg(
+                        self.traverse_table.currentRow()
+                    )
+                )
+                self.traverse_table.setCellWidget(row, 6, del_btn)
+
+            loaded.append(f"{len(legs)} traverse legs")
+            self.calculate_traverse()
+
+            # Switch to traverse tab
+            for i in range(self.tab_widget.count()):
+                if "Bearing" in self.tab_widget.tabText(i) or "Distance" in self.tab_widget.tabText(i):
+                    self.tab_widget.setCurrentIndex(i)
+                    break
+
+        # ── Summary message ───────────────────────────────────────────────────
+        if loaded:
+            self.show_status(f"✅ DXF import loaded: {', '.join(loaded)}")
+            self.write_audit("DXF_IMPORT", new_values=f"loaded={','.join(loaded)}")
+        else:
+            self.show_status("DXF import: nothing was loaded")
+
     def calculate_polygon_area(self, points):
         """Calculate polygon area using shoelace formula"""
         if len(points) < 3:
             return 0
-        
+
         area = 0
         n = len(points)
         for i in range(n):
             j = (i + 1) % n
             area += points[i][0] * points[j][1]
             area -= points[j][0] * points[i][1]
-        
+
         return abs(area) / 2.0
 
-    # ========== SURVEY SAVE METHODS ==========
+    def check_adjoining_surveys(self):
+        """Check if the saved boundary overlaps or is within 1 m of existing surveys.
+        Called automatically after saving coordinates or traverse."""
+        if not self.db_available or not self.current_survey_id:
+            return
+        try:
+            self.db_connection.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+            cur = self.db_connection.cursor()
+            cur.execute("""
+                SELECT s.plan_number, s.owner_name,
+                       ROUND(ST_Distance(b1.geometry, b2.geometry)::numeric, 3) AS dist
+                FROM   survey_boundaries b1
+                JOIN   survey_boundaries b2
+                       ON b1.survey_id != b2.survey_id
+                JOIN   surveys s ON s.survey_id = b2.survey_id
+                WHERE  b1.survey_id = %s
+                  AND  ST_DWithin(b1.geometry, b2.geometry, 1.0)
+                ORDER  BY dist
+                LIMIT  10
+            """, (self.current_survey_id,))
+            neighbours = cur.fetchall()
+            cur.close()
+
+            if not neighbours:
+                return
+
+            lines = ["⚠️  ADJOINING SURVEYS DETECTED\n"]
+            lines.append("The following surveys are within 1 m of this boundary:\n")
+            for plan_no, owner, dist in neighbours:
+                dist_f = float(dist)
+                if dist_f < 0.01:
+                    lines.append(f"❌  OVERLAP : {plan_no}  ({owner})")
+                else:
+                    lines.append(f"📍  {dist_f:.3f} m away : {plan_no}  ({owner})")
+            lines.append("\nPlease verify boundary accuracy before finalising.")
+            QMessageBox.warning(self, "Boundary Check", "\n".join(lines))
+
+        except Exception as e:
+            # PostGIS may not be available in offline mode — fail silently
+            print(f"[check_adjoining_surveys] {e}")
     def save_survey_metadata(self):
         """Save new survey to database"""
+        if not self.require_role('surveyor'):
+            return
         if not self.db_available:
             QMessageBox.warning(self, "No Database", "Database not connected")
             return
-        
+
         if not self.plan_number.text() or not self.owner_name.text():
             QMessageBox.warning(self, "Validation Error", "Plan Number and Owner Name are required")
             return
@@ -3405,8 +3966,11 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
             ))
             
             survey_id = cur.fetchone()[0]
+            self.write_audit("SURVEY_CREATE", table_name="surveys",
+                             record_id=survey_id,
+                             new_values=f"plan={self.plan_number.text().strip()}")
             cur.close()
-            
+
             # Update current survey
             self.current_survey_id = survey_id
             self.survey_id_display.setText(str(survey_id))
@@ -3414,13 +3978,13 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
                 f"📋 Current Survey: {self.plan_number.text()} (ID: {survey_id})"
             )
             self.update_survey_btn.setEnabled(True)
-            
+
             # Success message
             QMessageBox.information(
                 self, "Success",
                 f"✅ New survey saved successfully!\n\nSurvey ID: {survey_id}"
             )
-            
+
             # Refresh lists
             self.load_all_surveys()
             self.refresh_documents_list()
@@ -3437,10 +4001,12 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
 
     def update_survey_metadata(self):
         """Update existing survey in database"""
+        if not self.require_role('surveyor'):
+            return
         if not self.db_available:
             QMessageBox.warning(self, "No Database", "Database not connected")
             return
-        
+
         if not self.current_survey_id:
             QMessageBox.warning(
                 self, "No Survey",
@@ -3500,19 +4066,22 @@ class SurveyManagementDialog(QDialog, FORM_CLASS):
                 self.notes.toPlainText().strip() or None,
                 self.current_survey_id
             ))
-            
+
             cur.close()
-            
+            self.write_audit("SURVEY_UPDATE", table_name="surveys",
+                             record_id=self.current_survey_id,
+                             new_values=f"plan={self.plan_number.text().strip()}")
+
             # Update label
             self.current_survey_label.setText(
                 f"📋 Current Survey: {self.plan_number.text()} (ID: {self.current_survey_id}) - UPDATED"
             )
-            
+
             QMessageBox.information(
                 self, "Success",
                 f"✅ Survey ID {self.current_survey_id} updated successfully!"
             )
-            
+
             # Refresh lists
             self.load_all_surveys()
             self.refresh_documents_list()
