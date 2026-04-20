@@ -8,9 +8,9 @@ description=Digital archiving system for Nigerian cadastral survey records with 
 version=1.2.0
 author=ASTROMAT GEO-SERVICES
 email=ugwusochukwuma@gmail.com
-user manual=https://docs.google.com/document/d/1PZ1Gvf_fzbpQL_uH3iHdavKOnUAtGRFA/edit?usp=drive_link&ouid=106612657817880860704&rtpof=true&sd=true 
 
 about=Comprehensive digital archiving system for Nigerian survey records.
+user manual= https://docs.google.com/document/d/1PZ1Gvf_fzbpQL_uH3iHdavKOnUAtGRFA/edit?usp=drive_link&ouid=106612657817880860704&rtpof=true&sd=true 
 
   FEATURES:
   - AutoCAD DXF/DWG import with AI-powered metadata extraction
