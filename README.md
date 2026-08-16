@@ -1,10 +1,10 @@
 # Survey Management System — QGIS Plugin for Nigerian Cadastral Records
 
-> A published QGIS plugin for digitising, archiving, and managing Nigerian land survey records — with AutoCAD DXF import, AI-powered metadata extraction, PostGIS spatial storage, traverse calculations, and three-tier access control.
+> A published QGIS plugin for digitising, archiving, and managing Nigerian land survey records — with **PlotAccess** (road-aware, exact-area cadastral subdivision), AutoCAD DXF import, AI-powered metadata extraction, PostGIS spatial storage, traverse calculations, and three-tier access control.
 
 [![QGIS Plugin](https://img.shields.io/badge/QGIS-Plugin-3c9e3c?logo=qgis)](https://plugins.qgis.org/plugins/surveymanagement/)
-[![Version](https://img.shields.io/badge/Version-1.2.0-blue)](https://github.com/Sochukwumaobim/surveymanagement/releases)
-[![License: GPL v2](https://img.shields.io/badge/License-GPL%20v2-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
+[![Version](https://img.shields.io/badge/Version-2.0.0-blue)](https://github.com/Sochukwumaobim/surveymanagement/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![QGIS Version](https://img.shields.io/badge/QGIS-3.28%2B-brightgreen)](https://qgis.org)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-12%2B-336791?logo=postgresql)](https://www.postgresql.org)
 [![PostGIS](https://img.shields.io/badge/PostGIS-3.0%2B-1f5c2e)](https://postgis.net)
@@ -15,11 +15,27 @@
 
 The **Survey Management System** is a full-featured QGIS plugin built specifically for **Nigerian surveyors and cadastral offices** to replace paper-based filing systems with a robust, spatially-aware digital archive. It connects QGIS directly to a PostgreSQL/PostGIS database, enabling surveyors to store, retrieve, visualise, and verify land survey records — with 50-year archival durability and full audit trails.
 
-Now in **version 1.2.0**, the plugin adds AutoCAD DXF/DWG import with AI-powered plan metadata extraction, making it possible to onboard legacy paper plans at scale.
+Now in **version 2.0.0**, the plugin adds **PlotAccess** — a road-aware, exact-area cadastral subdivision engine that automates plot layout without compromising legal road access or area accuracy. Version 1.2.0's AutoCAD DXF/DWG import with AI-powered plan metadata extraction remains fully supported, making it possible to onboard legacy paper plans at scale.
 
 ### 🗺️ The Problem It Solves
 
-Land survey records in Nigeria are overwhelmingly paper-based. Files deteriorate, get lost, or become impossible to search across thousands of records. There is no standard digital system for linking survey plans to spatial geometries, LGA boundaries, or adjoining plots. This plugin provides a complete, open-source solution built on tools surveyors already use — QGIS and PostgreSQL.
+Land survey records in Nigeria are overwhelmingly paper-based. Files deteriorate, get lost, or become impossible to search across thousands of records. There is no standard digital system for linking survey plans to spatial geometries, LGA boundaries, or adjoining plots. Subdivision itself is typically done by hand in CAD — slow, and prone to shipping plots with no legal road access. This plugin provides a complete, open-source solution built on tools surveyors already use — QGIS and PostgreSQL.
+
+---
+
+## ✨ What's New in v2.0.0 (August 2026)
+
+![PlotAccess parcellation output — a subdivided perimeter with plots, roads, and area labels](docs/images/plotaccess-plan.png)
+
+- 🆕 **PlotAccess — Road-Aware Cadastral Subdivision** — automatically subdivides a perimeter into plots, with roads computed by the engine rather than drawn by hand
+- 🆕 **Hard Road-Access Enforcement** — every plot must front a real road corridor; landlocked plots are resolved automatically before a run finishes, not shipped as-is
+- 🆕 **Exact-Area Engine** — a Brent's-method root-finder solves for the exact target plot area on the large majority of plots, instead of approximate rounding
+- 🆕 **Parcellation Dialog** — paste or import perimeter coordinates, configure plot area, frontage, road width, and cross-road spacing, then run with one click
+- 🆕 **Colour-Coded Plan Output** — plots render directly on the QGIS canvas with standard/merged/reduced/fringe classification and compliant/edge status at a glance
+- 🆕 **Area Schedule & Setting-Out Coordinate Tables** — generated automatically, ready for office review or handing to a survey crew for staking out on site
+- 🆕 **DXF / Excel / PDF Export, Direct Print** — a branded, print-ready PDF report combining the plan, area schedule, and setting-out coordinates in one document
+- 🐛 Fixed a font double-scaling bug in the PDF report generator
+- 🐛 Redesigned the PDF report layout — branded header/footer, page numbers, zebra-striped tables, colour-coded status
 
 ---
 
@@ -41,6 +57,15 @@ Land survey records in Nigeria are overwhelmingly paper-based. Files deteriorate
 ---
 
 ## 🌟 Key Features
+
+### 🗺️ PlotAccess — Road-Aware Cadastral Subdivision
+- Automatically subdivide a perimeter into plots against a target area, minimum frontage, and road width
+- Roads computed by the engine automatically — no manual road drawing
+- Hard road-access constraint — every plot must front a real road corridor; landlocked plots resolved automatically
+- Exact-area solving via Brent's-method root-finding, not approximate rounding
+- Colour-coded plan output: standard, merged, reduced, and fringe plots at a glance
+- Area schedule and setting-out coordinate tables generated automatically
+- Export to DXF, Excel, or a branded PDF report; print directly from the plugin
 
 ### 📐 Survey Data Entry & Traverse Calculation
 - Enter survey points by direct Easting/Northing or via **Bearing & Distance traverse**
@@ -151,6 +176,16 @@ On first launch the **Setup Wizard** will:
 4. Review the **Import Preview** dialog — edit any fields as needed
 5. Click **Confirm Import** — coordinates, traverse legs, and metadata are saved
 
+### Run a Parcellation with PlotAccess
+
+1. Click the 🗺️ **Parcellation Module** icon in the toolbar (or **Plugins → Survey Management System → Parcellation Module**)
+2. Click **Enter / paste coordinates** and paste your perimeter (Easting, Northing — one point per line), or use **Import from DXF**
+3. Click **Load these coordinates as perimeter**
+4. Under **Parameters**, set **Plot area**, **Plot frontage**, and **Road width**
+5. Click **Run Parcellation** — the plan renders on the canvas with roads, plots, and labels
+6. Review the **Areas** and **Coordinates** tabs for the schedule and setting-out tables
+7. Export via **Export DXF**, **Export Excel**, or **Save Report (PDF)**
+
 ### Add a Traverse Manually
 
 1. Go to the **Bearing/Distance** tab
@@ -184,6 +219,8 @@ The plugin creates and manages the following tables in the `survey_management` d
 | `traverse_legs` | Individual legs with bearings, distances, and geometry |
 | `audit_log` | Full action audit trail with timestamps and user IDs |
 | `users` | User accounts with hashed passwords and role assignments |
+
+> **Note:** PlotAccess (the Parcellation Module) works directly on QGIS canvas geometry and exported files — it does not require or write to the PostgreSQL/PostGIS database above.
 
 ---
 
@@ -225,6 +262,8 @@ The plugin creates and manages the following tables in the `survey_management` d
 | Nothing plots on map | Check CRS matches your data; right-click layer → Zoom to Layer |
 | Bearing parse error | Use format `45d30m15s` or decimal degrees |
 | DXF import finds no data | Ensure the file uses standard AutoCAD layer names; contact support for non-standard plans |
+| **Run Parcellation** is greyed out | Load a perimeter first via **Enter / paste coordinates** or **Import from DXF** |
+| Landlocked plot count is not zero | Increase road width or reduce plot area/frontage relative to the perimeter size, then re-run |
 
 For detailed errors, open the **QGIS Python Console** (Plugins → Python Console).
 
@@ -247,6 +286,7 @@ Contributions are welcome from the QGIS community and Nigerian GIS practitioners
 - **Request features** — describe your surveying workflow requirement
 - **Translate** — add Hausa, Yoruba, or Igbo UI translations
 - **Improve DXF parsing** — extend support for more CAD plan formats
+- **Validate PlotAccess** — test the road-aware subdivision engine against real cadastral sites in your jurisdiction and report edge cases
 - **Port to other countries** — Ghana, Kenya, and other nations using WCB traverse standards
 
 ```bash
@@ -261,7 +301,7 @@ qgis-plugin-ci package        # Build the plugin zip
 
 ## 📜 License
 
-Released under the **GNU General Public License v2 or later (GPL-2.0+)** — free software you may use, modify, and redistribute. See [LICENSE](./LICENSE) for full terms.
+Released under the **MIT License** — free and open-source software you may use, modify, and redistribute, including in proprietary projects. See [LICENSE](./LICENSE) for full terms.
 
 ---
 
@@ -290,4 +330,4 @@ Released under the **GNU General Public License v2 or later (GPL-2.0+)** — fre
 
 ---
 
-*Keywords: QGIS plugin Nigeria, Nigerian cadastral survey management, land survey digitisation Nigeria, PostGIS survey records, QGIS Nigeria cadastral, survey plan archive Nigeria, bearing traverse calculator QGIS, Minna coordinate system EPSG 26332, Nigerian land registry GIS, AutoCAD DXF QGIS import, land administration Nigeria open source, survey management system Africa*
+*Keywords: QGIS plugin Nigeria, Nigerian cadastral survey management, land survey digitisation Nigeria, PostGIS survey records, QGIS Nigeria cadastral, survey plan archive Nigeria, bearing traverse calculator QGIS, Minna coordinate system EPSG 26332, Nigerian land registry GIS, AutoCAD DXF QGIS import, land administration Nigeria open source, survey management system Africa, road-aware cadastral subdivision, PlotAccess QGIS plugin, automated plot subdivision, exact-area land subdivision, open-source cadastral parcellation engine*
