@@ -106,7 +106,7 @@ class TableLoaderThread(QThread):
                 has_geometry = cur.fetchone() is not None
                 
                 # Get row count
-                cur.execute(pgsql.SQL('SELECT COUNT(*) FROM {}').format(pgsql.Identifier(table_name)))
+                cur.execute(sql.SQL('SELECT COUNT(*) FROM {}').format(sql.Identifier(table_name)))
                 row_count = cur.fetchone()[0]
                 
                 # Get column info
@@ -165,7 +165,7 @@ class DataPreviewThread(QThread):
             
             # Get sample data
             self.progress.emit(f"Loading data from {self.table_name}...")
-            cur.execute(pgsql.SQL('SELECT * FROM {} LIMIT %s').format(pgsql.Identifier(self.table_name)), (self.limit,))
+            cur.execute(sql.SQL('SELECT * FROM {} LIMIT %s').format(sql.Identifier(self.table_name)), (self.limit,))
             data = cur.fetchall()
             
             cur.close()

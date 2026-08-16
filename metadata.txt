@@ -4,15 +4,16 @@
 name=Survey Management System
 qgisMinimumVersion=3.0
 qgisMaximumVersion=3.99
-description=Digital archiving system for Nigerian cadastral survey records with DXF import, AI data extraction, coordinate/traverse calculations, document management, and PostgreSQL/PostGIS integration.
-version=1.2.0
+description=Digital archiving system for Nigerian cadastral survey records with DXF import, AI data extraction, coordinate/traverse calculations, document management, PostgreSQL/PostGIS integration, and PlotAccess — a road-aware, exact-area cadastral subdivision engine.
+version=2.0.0
 author=ASTROMAT GEO-SERVICES
 email=ugwusochukwuma@gmail.com
 
-about=Comprehensive digital archiving system for Nigerian survey records.
-user manual= https://docs.google.com/document/d/1PZ1Gvf_fzbpQL_uH3iHdavKOnUAtGRFA/edit?usp=drive_link&ouid=106612657817880860704&rtpof=true&sd=true 
+about=Comprehensive digital archiving system for Nigerian survey records, now with PlotAccess: an automated, road-aware cadastral subdivision engine.
 
   FEATURES:
+  - PlotAccess — road-aware, exact-area cadastral subdivision, with
+    automatic road layout and hard road-access enforcement
   - AutoCAD DXF/DWG import with AI-powered metadata extraction
   - Bearing and distance traverse calculator (WCB and quadrant, DMS input)
   - 1:5000 Nigerian Survey Regulations precision ratio check
@@ -33,6 +34,23 @@ homepage=https://github.com/Sochukwumaobim/surveymanagement
 hasProcessingProvider=no
 
 changelog=
+    Version 2.0.0 (August 2026):
+    NEW: PlotAccess — road-aware, exact-area cadastral subdivision engine
+    NEW: Automatic road layout — roads are computed by the engine, no
+         manual road drawing required
+    NEW: Hard road-access constraint — every plot must front a real
+         road corridor; landlocked plots resolved automatically
+    NEW: Exact target area on the large majority of plots via
+         Brent's-method root-finding, not approximate rounding
+    NEW: Parcellation dialog — paste/import perimeter coordinates,
+         configurable plot area, frontage, road width, cross-road spacing
+    NEW: Colour-coded plan output with compliant/edge plot status
+    NEW: Area schedule and setting-out coordinate tables
+    NEW: Export to DXF, Excel, or a branded PDF report; direct print
+    FIX: Corrected a font double-scaling bug in the PDF report generator
+    FIX: Redesigned PDF report layout — branded header/footer, page
+         numbers, zebra-striped tables, colour-coded status
+
     Version 1.2.0 (April 2026):
     NEW: AutoCAD DXF/DWG import — extract beacon coordinates, traverse
          legs, bearings, distances and metadata from AutoCAD plan files
@@ -55,7 +73,7 @@ changelog=
     Initial release — survey metadata, coordinates, traverses,
     documents, PostgreSQL/PostGIS integration, global search.
 
-tags=survey, cadastral, Nigeria, bearing, traverse, DXF, AutoCAD, PostgreSQL, PostGIS, land survey, coordinate
+tags=survey, cadastral, Nigeria, bearing, traverse, DXF, AutoCAD, PostgreSQL, PostGIS, land survey, coordinate, cadastral subdivision, parcellation, road-aware, PlotAccess, land parcel
 
 category=Database
 icon=icon.png

@@ -7,7 +7,12 @@
 
 import sys
 import getpass
-import xmlrpc.client
+import xmlrpc.client  # nosec B411 - monkey-patched below via defusedxml
+try:
+    import defusedxml.xmlrpc
+    defusedxml.xmlrpc.monkey_patch()  # nosec B411 - mitigates XML vulnerabilities
+except ImportError:
+    pass  # defusedxml not available — xmlrpc used with trusted QGIS plugin repo only
 from optparse import OptionParser
 
 standard_library.install_aliases()

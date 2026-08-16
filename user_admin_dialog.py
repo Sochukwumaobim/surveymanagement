@@ -345,23 +345,42 @@ class UserAdminDialog(QDialog):
         try:
             action_filter = self.audit_filter.currentText()
             limit_text = self.audit_limit.currentText()
-            limit_clause = "" if limit_text == "All" else f"LIMIT {limit_text}"
+            limit_val = None if limit_text == "All" else int(limit_text)
 
             if action_filter == "All":
-                cur.execute(f"""
-                    SELECT logged_at, username, action, table_name,
-                           record_id, old_values, new_values
-                    FROM audit_log
-                    ORDER BY logged_at DESC {limit_clause}
-                """)
+                if limit_val is None:
+                    cur.execute("""
+                        SELECT logged_at, username, action, table_name,
+                               record_id, old_values, new_values
+                        FROM audit_log
+                        ORDER BY logged_at DESC
+                    """)
+                else:
+                    cur.execute("""
+                        SELECT logged_at, username, action, table_name,
+                               record_id, old_values, new_values
+                        FROM audit_log
+                        ORDER BY logged_at DESC
+                        LIMIT %s
+                    """, (limit_val,))
             else:
-                cur.execute(f"""
-                    SELECT logged_at, username, action, table_name,
-                           record_id, old_values, new_values
-                    FROM audit_log
-                    WHERE action = %s
-                    ORDER BY logged_at DESC {limit_clause}
-                """, (action_filter,))
+                if limit_val is None:
+                    cur.execute("""
+                        SELECT logged_at, username, action, table_name,
+                               record_id, old_values, new_values
+                        FROM audit_log
+                        WHERE action = %s
+                        ORDER BY logged_at DESC
+                    """, (action_filter,))
+                else:
+                    cur.execute("""
+                        SELECT logged_at, username, action, table_name,
+                               record_id, old_values, new_values
+                        FROM audit_log
+                        WHERE action = %s
+                        ORDER BY logged_at DESC
+                        LIMIT %s
+                    """, (action_filter, limit_val))
 
             rows = cur.fetchall()
             cur.close()

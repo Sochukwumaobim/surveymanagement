@@ -789,7 +789,8 @@ class DatabaseManager:
             table_info = []
             for table in tables:
                 table_name, col_count = table
-                cur.execute(f"SELECT COUNT(*) FROM {table_name}")
+                from psycopg2 import sql as _sql
+                cur.execute(_sql.SQL("SELECT COUNT(*) FROM {}").format(_sql.Identifier(table_name)))
                 row_count = cur.fetchone()[0]
                 table_info.append({
                     'name': table_name,
