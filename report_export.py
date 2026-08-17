@@ -409,6 +409,14 @@ def render_report(painter, page_rect, result: "ParcellationResult"):
     for rp in result.road_polygons:
         xs += [pt[0] for pt in rp]
         ys += [pt[1] for pt in rp]
+    # Access annotations are drawn deliberately OUTSIDE the perimeter, so
+    # they must be included in the bounding box here too -- otherwise the
+    # scale/origin below is computed from the perimeter alone and the
+    # access line would land off the edge of the plan area.
+    access_lines = getattr(result, "access_lines", [])
+    for al in access_lines:
+        xs += [pt[0] for pt in al]
+        ys += [pt[1] for pt in al]
     if xs and ys:
         minx, maxx = min(xs), max(xs)
         miny, maxy = min(ys), max(ys)
@@ -421,6 +429,32 @@ def render_report(painter, page_rect, result: "ParcellationResult"):
             # flip Y (screen y grows downward, survey N grows upward)
             return (ox + (pt[0] - minx) * scale,
                     oy + (maxy - pt[1]) * scale)
+
+        # ---- OSM basemap, drawn first so everything else layers on top.
+        #      The fetch extent is the INVERSE of to_px applied to the
+        #      full plan_rect (not just the tight content bbox) -- this
+        #      guarantees the basemap image aligns pixel-for-pixel with
+        #      the roads/plots/perimeter drawn afterward via to_px,
+        #      rather than fetching a separately-fitted extent that could
+        #      drift out of alignment with the vector overlay. ----
+        basemap_drawn = False
+        if getattr(result, "show_basemap", False):
+            def _px_to_world(x_px, y_px):
+                return (minx + (x_px - ox) / scale, maxy - (y_px - oy) / scale)
+
+            bm_minx, bm_maxy = _px_to_world(plan_rect.left(), plan_rect.top())
+            bm_maxx, bm_miny = _px_to_world(plan_rect.right(), plan_rect.bottom())
+            dest_crs = getattr(result, "crs_obj", None)
+            basemap_img = None
+            if dest_crs is not None and dest_crs.isValid():
+                basemap_img = _render_osm_basemap(
+                    bm_minx, bm_miny, bm_maxx, bm_maxy, dest_crs,
+                    px_w=plan_rect.width() * 4, px_h=plan_rect.height() * 4)
+            if basemap_img is not None:
+                painter.drawImage(QRectF(plan_rect.left(), plan_rect.top(),
+                                          plan_rect.width(), plan_rect.height()),
+                                   basemap_img)
+                basemap_drawn = True
 
         # Roads, each with a small centroid label ("ROAD n")
         painter.setBrush(QBrush(QColor(217, 217, 217)))
@@ -469,6 +503,46 @@ def render_report(painter, page_rect, result: "ParcellationResult"):
             px, py = to_px(pt)
             painter.drawText(int(px + 3), int(py - 3), f"BP{i+1}")
 
+        # ---- Existing-access annotations: reference-only lines showing
+        #      where a real road outside the perimeter meets it. Drawn
+        #      dashed/amber to read clearly as "not part of the
+        #      subdivision" -- matching the same colour used for this in
+        #      the QGIS canvas layer, so the plan and the live dialog agree. ----
+        if access_lines:
+            access_font = _pt_font(5, bold=True)
+            access_pen = QPen(QColor(244, 160, 32), 1.2)
+            access_pen.setStyle(Qt.DashLine)
+            for ai, al in enumerate(access_lines):
+                pts_px = [to_px(pt) for pt in al]
+                if len(pts_px) < 2:
+                    continue
+                painter.setPen(access_pen)
+                for j in range(len(pts_px) - 1):
+                    painter.drawLine(int(pts_px[j][0]), int(pts_px[j][1]),
+                                      int(pts_px[j+1][0]), int(pts_px[j+1][1]))
+                mx, my = pts_px[len(pts_px) // 2]
+                painter.setFont(access_font)
+                painter.setPen(QPen(QColor(180, 110, 10)))
+                label = "Existing Access" if len(access_lines) == 1 else f"Existing Access {ai+1}"
+                painter.drawText(int(mx + 4), int(my - 4), label)
+
+        # ---- OSM attribution -- required by OSM's licence whenever the
+        #      basemap actually rendered; omitted entirely if it didn't
+        #      (no basemap drawn = nothing to attribute). Small white
+        #      backing strip so it stays legible over varying imagery. ----
+        if basemap_drawn:
+            attrib_font = _pt_font(4)
+            painter.setFont(attrib_font)
+            attrib_text = "\u00a9 OpenStreetMap contributors"
+            tw = _text_width(painter, attrib_text)
+            ax = plan_rect.left() + 2
+            ay = plan_rect.bottom() - 3
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(QColor(255, 255, 255, 210)))
+            painter.drawRect(int(ax - 2), int(ay - 8), int(tw + 4), 10)
+            painter.setPen(QPen(QColor(60, 60, 60)))
+            painter.drawText(int(ax), int(ay), attrib_text)
+
         # ---- Legend: colour key for the plot kinds + roads, directly
         #      under the plan so it's readable without a separate page ----
         legend_font = _pt_font(6)
@@ -487,6 +561,13 @@ def render_report(painter, page_rect, result: "ParcellationResult"):
             painter.setPen(QPen(QColor(0, 0, 0)))
             painter.drawText(int(lx + swatch + 4), int(ly), label)
             lx += swatch + 4 + _text_width(painter, label) + 16
+
+        if access_lines:
+            painter.setPen(QPen(QColor(244, 160, 32), 1.2))
+            pen = painter.pen(); pen.setStyle(Qt.DashLine); painter.setPen(pen)
+            painter.drawLine(int(lx), int(ly - swatch // 2), int(lx + 14), int(ly - swatch // 2))
+            painter.setPen(QPen(QColor(0, 0, 0)))
+            painter.drawText(int(lx + 18), int(ly), "Existing access (reference only)")
 
     # ---- Following page(s): area schedule ----
     body = _next_page("Schedule of Areas")
@@ -600,6 +681,96 @@ def _qpolygon(ring, to_px):
         return None
     pts = [QPointF(*to_px(pt)) for pt in ring]
     return QPolygonF(pts)
+
+
+def _render_osm_basemap(minx, miny, maxx, maxy, dest_crs, px_w, px_h, timeout_ms=12000):
+    """Render an OSM XYZ basemap for the given extent to a QImage, entirely
+    in-process via QGIS's own map renderer (handles reprojection from OSM's
+    native Web Mercator into the destination CRS, and tile fetch/caching).
+
+    dest_crs is a QgsCoordinateReferenceSystem object, not a string -- the
+    caller (parcellation_dialog.py) gets it directly from the Working CRS
+    picker widget, so there's no string round-trip and no "which EPSG
+    string format does this API accept" guessing anywhere in this path.
+
+    Returns None on ANY failure -- no network, DNS failure, slow tile
+    server, whatever -- so the caller falls back to today's vector-only
+    plan with zero behaviour change. This is a deliberate product decision:
+    report generation must never hang or error out because a tile server
+    is unreachable, given this plugin's real-world use in areas with
+    unreliable connectivity. Bounded by timeout_ms via an event-loop timer
+    rather than relying on any per-job timeout API, since QGIS's map
+    renderer job doesn't expose one directly across versions.
+
+    timeout_ms defaults to 12s, not 4s -- a *fresh*, uncached tile fetch at
+    4x-oversampled print resolution can genuinely take several seconds,
+    and report generation is a one-shot action the user already expects
+    to take a moment, unlike an interactive canvas redraw. If the basemap
+    still doesn't appear, check the QGIS Log Messages panel (View ->
+    Panels -> Log Messages) for a "Parcellation" entry -- every failure
+    path below logs the real reason instead of swallowing it silently.
+    """
+    def _log(msg):
+        try:
+            from qgis.core import QgsMessageLog, Qgis
+            QgsMessageLog.logMessage(msg, "Parcellation", Qgis.Warning)
+        except Exception:
+            pass
+
+    try:
+        from qgis.core import (QgsRasterLayer, QgsRectangle, QgsMapSettings,
+                                QgsMapRendererCustomPainterJob)
+        from qgis.PyQt.QtGui import QImage, QPainter as QtPainter, QColor as QtColor
+        from qgis.PyQt.QtCore import QSize, QEventLoop, QTimer
+
+        osm_uri = ("type=xyz&url=https://tile.openstreetmap.org/%7Bz%7D/%7Bx%7D/"
+                   "%7By%7D.png&zmax=19&zmin=0")
+        osm = QgsRasterLayer(osm_uri, "osm_report_basemap_tmp", "wms")
+        if not osm.isValid():
+            _log(f"basemap: OSM layer invalid ({osm.error().summary() if osm.error() else 'unknown'})")
+            return None
+
+        if dest_crs is None or not dest_crs.isValid():
+            _log(f"basemap: destination CRS is not valid ({dest_crs})")
+            return None
+
+        ms = QgsMapSettings()
+        ms.setDestinationCrs(dest_crs)
+        ms.setLayers([osm])
+        ms.setBackgroundColor(QtColor(255, 255, 255))
+        ms.setOutputSize(QSize(max(1, int(px_w)), max(1, int(px_h))))
+        ms.setExtent(QgsRectangle(minx, miny, maxx, maxy))
+
+        img = QImage(ms.outputSize(), QImage.Format_ARGB32_Premultiplied)
+        img.fill(0)
+        p = QtPainter(img)
+
+        loop = QEventLoop()
+        job = QgsMapRendererCustomPainterJob(ms, p)
+        job.finished.connect(loop.quit)
+        timer = QTimer()
+        timer.setSingleShot(True)
+        timer.timeout.connect(loop.quit)
+        timer.start(timeout_ms)
+        job.start()
+        loop.exec_()
+        timer.stop()
+
+        if job.isActive():
+            job.cancel()
+            p.end()
+            _log(f"basemap: timed out after {timeout_ms}ms (fresh tile "
+                 "fetch may just need longer -- see timeout_ms)")
+            return None
+        p.end()
+        return img
+    except Exception as ex:
+        # Never let a basemap failure break report generation -- but do
+        # log what actually happened instead of failing silently with no
+        # trace at all.
+        import traceback
+        _log(f"basemap: unexpected error: {ex}\n{traceback.format_exc()}")
+        return None
 
 
 def _setup_landscape_printer():

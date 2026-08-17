@@ -157,13 +157,22 @@ class SurveyManagement:
 
     def open_parcellation(self):
         """Open the parcellation module dialog."""
-        from qgis.core import QgsCoordinateReferenceSystem
+        from qgis.core import QgsProject
 
-        # Inherit CRS from main dialog if available, else default to Nigeria East
-        crs = QgsCoordinateReferenceSystem("EPSG:26333")
+        # Inherit CRS from the main dialog if it's already open; otherwise
+        # fall back to the QGIS PROJECT's own current CRS. No hardcoded
+        # regional fallback of any kind -- this plugin is used well beyond
+        # any one country's survey zones. If neither source yields a valid
+        # CRS, ParcellationDialog itself handles it: the Working CRS picker
+        # widget in its Perimeter panel establishes QGIS's own neutral
+        # global default and lets the user pick any CRS explicitly, rather
+        # than this code silently guessing on their behalf.
+        crs = QgsProject.instance().crs()
         if self.dialog and hasattr(self.dialog, 'get_active_crs'):
             try:
-                crs = self.dialog.get_active_crs()
+                active = self.dialog.get_active_crs()
+                if active and active.isValid():
+                    crs = active
             except Exception:
                 pass
 

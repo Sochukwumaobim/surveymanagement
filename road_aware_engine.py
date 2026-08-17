@@ -447,6 +447,92 @@ def build_subdivision(perimeter: Polygon, plot_w: float, plot_d: float,
 # Plugin adapter: same public shape as ParcellationEngine
 # --------------------------------------------------------------------------- #
 
+def edge_fronts_road(p1, p2, road_union, touch_tol=0.15) -> bool:
+    """True if this plot edge runs along a road (sampled along its length,
+    not just the midpoint -- a short edge right at a corner shouldn't be
+    missed by a single sample point)."""
+    edge = LineString([p1, p2])
+    length = edge.length
+    if length < 1e-6:
+        return False
+    n_samples = max(3, int(length // 2))
+    hits = 0
+    for i in range(n_samples + 1):
+        pt = edge.interpolate(i / n_samples, normalized=True)
+        if pt.distance(road_union) < touch_tol:
+            hits += 1
+    return hits / (n_samples + 1) > 0.8
+
+
+def apply_corner_truncation(poly: Polygon, road_union, truncation_m: float,
+                             min_turn_deg: float = 30.0) -> Polygon:
+    """Chamfer any plot corner where two road-fronting edges meet at a real
+    turn -- the standard corner-lot splay requested for junction sight-lines.
+    Leaves the polygon untouched if truncation_m <= 0, there's no road
+    geometry to test against, or no corner on this plot qualifies (an
+    ordinary mid-row plot with frontage on only one side never triggers
+    this -- it needs two *adjacent* road-fronting edges).
+
+    Verified against real engine output before being wired in here: see
+    testpkg/truncation_test.py in the dev sandbox for the standalone check.
+    """
+    if truncation_m <= 0 or road_union is None or road_union.is_empty:
+        return poly
+
+    coords = list(poly.exterior.coords)
+    if coords[0] == coords[-1]:
+        coords = coords[:-1]
+    n = len(coords)
+    if n < 3:
+        return poly
+
+    fronts = [edge_fronts_road(coords[i], coords[(i + 1) % n], road_union)
+              for i in range(n)]
+
+    new_coords = []
+    changed = False
+    for i in range(n):
+        prev_fronts = fronts[i - 1]   # edge ENDING at vertex i
+        next_fronts = fronts[i]       # edge STARTING at vertex i
+        if prev_fronts and next_fronts:
+            p_prev, p_this, p_next = coords[i - 1], coords[i], coords[(i + 1) % n]
+            v1 = (p_this[0] - p_prev[0], p_this[1] - p_prev[1])
+            v2 = (p_next[0] - p_this[0], p_next[1] - p_this[1])
+            len_prev, len_next = math.hypot(*v1), math.hypot(*v2)
+            if len_prev < 1e-9 or len_next < 1e-9:
+                new_coords.append(p_this)
+                continue
+
+            a1, a2 = math.atan2(v1[1], v1[0]), math.atan2(v2[1], v2[0])
+            turn = abs((a2 - a1 + math.pi) % (2 * math.pi) - math.pi)
+            if turn < math.radians(min_turn_deg):
+                # Nearly straight -- both edges front the same continuous
+                # road run, not a real junction corner. Don't truncate.
+                new_coords.append(p_this)
+                continue
+
+            t_prev = min(truncation_m, len_prev * 0.5)
+            t_next = min(truncation_m, len_next * 0.5)
+            p_a = (p_this[0] - v1[0] / len_prev * t_prev,
+                   p_this[1] - v1[1] / len_prev * t_prev)
+            p_b = (p_this[0] + v2[0] / len_next * t_next,
+                   p_this[1] + v2[1] / len_next * t_next)
+            new_coords.extend([p_a, p_b])
+            changed = True
+        else:
+            new_coords.append(coords[i])
+
+    if not changed:
+        return poly
+
+    new_poly = Polygon(new_coords)
+    if not new_poly.is_valid:
+        new_poly = new_poly.buffer(0)
+    if new_poly.geom_type == "MultiPolygon":
+        new_poly = max(new_poly.geoms, key=lambda g: g.area)
+    return new_poly
+
+
 class RoadAwareEngine:
     """
     Drop-in alternative to ParcellationEngine using the exact-area Brent's
@@ -472,6 +558,7 @@ class RoadAwareEngine:
         self.frontage           = 15.0
         self.road_width         = 9.0
         self.cross_road_spacing = 0.0
+        self.corner_truncation  = 0.0  # metres; 0 = off (default, matches v1.x output)
         self.min_row_depth_frac = 0.15
         self.extend_end_rows_to_boundary = True
 
@@ -490,6 +577,7 @@ class RoadAwareEngine:
         use_optimizer:  Optional[bool]  = None,   # accepted, not used
         angle_steps:    Optional[int]   = None,   # accepted, not used
         cross_road_spacing: Optional[float] = None,
+        corner_truncation: Optional[float] = None,
         normalize_edge_plots: Optional[bool] = None,  # accepted, not used
         undersized_frac: Optional[float] = None,  # accepted, not used
         oversized_frac:  Optional[float] = None,  # accepted, not used
@@ -499,6 +587,8 @@ class RoadAwareEngine:
         if road_width is not None: self.road_width = max(0.0, road_width)
         if cross_road_spacing is not None:
             self.cross_road_spacing = max(0.0, cross_road_spacing)
+        if corner_truncation is not None:
+            self.corner_truncation = max(0.0, corner_truncation)
 
     def subdivide(
         self,
@@ -523,9 +613,32 @@ class RoadAwareEngine:
         if progress_cb:
             progress_cb(80)
 
+        # ── Road geometry, computed BEFORE building Plot objects ──────────
+        # (moved ahead of the loop below, from where it originally sat
+        # after Plot construction) so corner truncation has road_union to
+        # test plot edges against. Plot() derives area/centroid/compactness/
+        # label from whatever polygon it's handed, so truncating first means
+        # every downstream consumer -- area schedule, setting-out
+        # coordinates, DXF/PDF export -- reflects the chamfered corner with
+        # no separate patch-up needed anywhere else.
+        road_rings: List[Ring] = []
+        for r in res["roads"]:
+            for poly in as_polys(r):
+                for simple_poly in dissolve_holes_to_simple(poly):
+                    if simple_poly.area > 0.5:
+                        road_rings.append(list(simple_poly.exterior.coords))
+        road_union = unary_union([Polygon(r) for r in road_rings if len(r) >= 3]) \
+                     if road_rings else Polygon()
+
         # ── Convert to plugin Plot objects ─────────────────────────────
         plots: List[Plot] = []
+        n_truncated = 0
         for poly, kind, label in zip(res["plots"], res["kinds"], res["labels"]):
+            if self.corner_truncation > 0:
+                truncated_poly = apply_corner_truncation(poly, road_union, self.corner_truncation)
+                if truncated_poly is not poly and truncated_poly.area != poly.area:
+                    n_truncated += 1
+                poly = truncated_poly
             plot = Plot(label, poly, self.plot_area, is_edge=(kind != "standard"))
             plot.kind = kind  # extra attribute -- not part of the base Plot
             # "standard" plots are exact-area by construction; classify
@@ -535,19 +648,10 @@ class RoadAwareEngine:
             plot.compliant = (kind == "standard")
             plots.append(plot)
 
-        road_rings: List[Ring] = []
-        for r in res["roads"]:
-            for poly in as_polys(r):
-                for simple_poly in dissolve_holes_to_simple(poly):
-                    if simple_poly.area > 0.5:
-                        road_rings.append(list(simple_poly.exterior.coords))
-
         if progress_cb:
             progress_cb(95)
 
         # ── Road-access verification ────────────────────────────────────
-        road_union = unary_union([Polygon(r) for r in road_rings if len(r) >= 3]) \
-                     if road_rings else Polygon()
         n_landlocked = 0
         for p in plots:
             has_road = (not road_union.is_empty) and p._poly.distance(road_union) < 0.05
@@ -588,6 +692,8 @@ class RoadAwareEngine:
             "coverage_pct":         cov,
             "n_landlocked":         n_landlocked,
             "cross_road_spacing_m": self.cross_road_spacing,
+            "corner_truncation_m":  self.corner_truncation,
+            "n_truncated":          n_truncated,
             "engine":               "road_aware",
             "n_standard":           n_std,
             "n_merged":             n_merged,

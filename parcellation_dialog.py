@@ -14,7 +14,7 @@ from qgis.PyQt.QtWidgets import (
     QSplitter, QTextEdit, QProgressBar,
     QTableWidget, QTableWidgetItem, QHeaderView,
     QAbstractItemView, QListWidget, QListWidgetItem, QScrollArea,
-    QSizePolicy
+    QSizePolicy, QCheckBox
 )
 from qgis.PyQt.QtCore import Qt, QThread, pyqtSignal, QTimer, QVariant
 from qgis.PyQt.QtGui import QColor, QFont, QBrush
@@ -26,9 +26,10 @@ from qgis.core import (
     QgsFillSymbol, QgsLineSymbol,
     QgsSingleSymbolRenderer,
     QgsPalLayerSettings, QgsVectorLayerSimpleLabeling,
-    QgsTextFormat, QgsTextBufferSettings, QgsRectangle
+    QgsTextFormat, QgsTextBufferSettings, QgsRectangle,
+    QgsRasterLayer
 )
-from qgis.gui import QgsMapToolEmitPoint, QgsRubberBand
+from qgis.gui import QgsMapToolEmitPoint, QgsRubberBand, QgsProjectionSelectionWidget
 
 from .parcellation_engine import (
     ParcellationResult,
@@ -80,6 +81,37 @@ class RoadDrawingTool(QgsMapToolEmitPoint):
         super().deactivate()
 
 
+class AccessAnnotationTool(RoadDrawingTool):
+    """Same click-to-add-vertex / right-click-to-finish interaction as
+    RoadDrawingTool, just a different colour and a different signal name --
+    this is purely a reference annotation (where an existing road outside
+    the perimeter meets it), never geometry the subdivision engine sees.
+    Kept as a subclass rather than a copy so both tools share one tested
+    interaction implementation."""
+    access_finished = pyqtSignal(list)
+
+    def __init__(self, canvas):
+        super().__init__(canvas)
+        self._rb.setColor(QColor(244, 160, 32))   # amber -- matches the
+        self._rb.setWidth(4)                       # "fringe" plot colour
+        self._rb.setLineStyle(Qt.DashLine)          # used elsewhere, so it
+                                                     # reads as "reference",
+                                                     # not "internal road"
+
+    def canvasPressEvent(self, e):
+        # Reuse all the click/right-click logic, just emit on the new signal
+        # instead of road_finished.
+        pt = self.toMapCoordinates(e.pos())
+        if e.button() == Qt.RightButton:
+            if len(self._pts) >= 2:
+                self.access_finished.emit(list(self._pts))
+            self._pts = []
+            self._rb.reset(QgsWkbTypes.LineGeometry)
+            return
+        self._pts.append((pt.x(), pt.y()))
+        self._rb.addPoint(pt)
+
+
 class SubdivisionWorker(QThread):
     finished = pyqtSignal(object)
     error    = pyqtSignal(str)
@@ -101,8 +133,14 @@ class ParcellationDialog(QDialog):
         super().__init__(parent)
         self.iface  = iface
         self.canvas = iface.mapCanvas()
-        self.crs    = crs if (crs and crs.isValid()) \
-                      else QgsCoordinateReferenceSystem("EPSG:26333")
+        # No hardcoded regional fallback here -- this plugin is used well
+        # beyond any one country's survey zones. If the caller didn't hand
+        # us a valid CRS, leave self.crs invalid for now; the
+        # QgsProjectionSelectionWidget built in _build_ui() establishes
+        # its own sensible starting point (QGIS's own global default, not
+        # a guess of mine) and self.crs is synced from it immediately
+        # after, so it's always valid by the time anything else runs.
+        self.crs    = crs if (crs and crs.isValid()) else QgsCoordinateReferenceSystem()
 
         self.setWindowTitle("Parcellation Module — Survey Management System v2.0")
         # Default size is notably larger than before so the tables show
@@ -114,6 +152,11 @@ class ParcellationDialog(QDialog):
 
         self._perimeter: List = existing_perimeter or []
         self._roads: List     = []
+        self._access_lines: List = []   # reference-only annotations -- NEVER
+                                         # passed to the engine (see class docstring)
+        self._basemap_layer = None      # not in self._layers -- must survive
+                                         # perimeter clear/reload, unlike the
+                                         # roads/plots/access layers
         self._result          = None
         self._layers          = {}
         self._draw_tool       = None
@@ -136,11 +179,14 @@ class ParcellationDialog(QDialog):
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 8, 10, 8)
 
+        ttl_row = QHBoxLayout()
         ttl = QLabel("🗺  Parcellation Module")
         ttl.setFont(QFont("Arial", 13, QFont.Bold))
         ttl.setStyleSheet("color:#1A5C38;padding:4px 0;")
         ttl.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        root.addWidget(ttl, 0)
+        ttl_row.addWidget(ttl)
+        ttl_row.addStretch(1)
+        root.addLayout(ttl_row, 0)
 
         # The splitter (perimeter/roads/parameters panel + tabs) is the
         # only part of this dialog that should ever grow -- give it the
@@ -163,6 +209,28 @@ class ParcellationDialog(QDialog):
         g1.setStyleSheet("QGroupBox{font-weight:bold;color:#1A5C38;}")
         v1 = QVBoxLayout(g1)
 
+        # Working CRS -- a real, interactive picker, not a silent guess.
+        # This plugin is used well beyond any one country's survey zones,
+        # so there is deliberately no hardcoded regional default anywhere
+        # in this module. QgsProjectionSelectionWidget starts on whatever
+        # CRS was inherited (main dialog, then QGIS project) and lets the
+        # user pick any of the thousands of CRSs QGIS knows about if that
+        # guess is wrong -- everything downstream (perimeter, plots,
+        # basemap) uses exactly what's shown here, always visible, never
+        # buried in logic the user can't see.
+        crs_row = QHBoxLayout()
+        crs_row.addWidget(QLabel("Working CRS:"))
+        self.crs_picker = QgsProjectionSelectionWidget()
+        if self.crs.isValid():
+            self.crs_picker.setCrs(self.crs)
+        # Sync back from whatever the widget actually ended up displaying --
+        # if self.crs was invalid, this is QGIS's own global default, not
+        # a value chosen by this plugin.
+        self.crs = self.crs_picker.crs()
+        self.crs_picker.crsChanged.connect(self._crs_changed)
+        crs_row.addWidget(self.crs_picker, 1)
+        v1.addLayout(crs_row)
+
         self.btn_enter = QPushButton("📋  Enter / paste coordinates")
         self.btn_enter.setFixedHeight(34)
         self.btn_enter.setStyleSheet(
@@ -182,8 +250,21 @@ class ParcellationDialog(QDialog):
         self.lbl_peri.setStyleSheet("color:#888;font-size:11px;")
         self.lbl_peri.setWordWrap(True)
 
+        self.chk_basemap = QCheckBox("🗺️  Show OSM basemap")
+        self.chk_basemap.setChecked(True)
+        self.chk_basemap.setToolTip(
+            "Adds an OpenStreetMap layer under the plan on the canvas and\n"
+            "in the PDF report, so you can see the real road network and\n"
+            "surrounding context around the site.\n"
+            "Requires an internet connection -- if none is available, both\n"
+            "the canvas and the report fall back silently to today's\n"
+            "vector-only look, with no error.")
+        self.chk_basemap.toggled.connect(self._toggle_basemap)
+        lbl_attrib = QLabel("\u00a9 OpenStreetMap contributors")
+        lbl_attrib.setStyleSheet("color:#999;font-size:9px;")
+
         for w in (self.btn_enter, self.btn_dxf, self.btn_clr_peri,
-                  self.lbl_peri):
+                  self.lbl_peri, self.chk_basemap, lbl_attrib):
             v1.addWidget(w)
         lv.addWidget(g1)
 
@@ -242,8 +323,63 @@ class ParcellationDialog(QDialog):
         v2.addWidget(self.lbl_roads)
         lv.addWidget(g2)
 
+        # Existing access (reference-only annotation, never fed to the engine)
+        g2b = QGroupBox("3.  Existing Access (optional)")
+        g2b.setStyleSheet("QGroupBox{font-weight:bold;color:#1A5C38;}")
+        v2b = QVBoxLayout(g2b)
+
+        self.btn_access = QPushButton("📍  Mark existing road access")
+        self.btn_access.setCheckable(True)
+        self.btn_access.setFixedHeight(32)
+        self.btn_access.setEnabled(False)
+        self.btn_access.setToolTip(
+            "Trace where a real, existing road outside the perimeter meets\n"
+            "the boundary -- e.g. the entrance the site will actually be\n"
+            "accessed from. Reference only: shown on the canvas and in the\n"
+            "PDF report, but never used by the subdivision engine.")
+        self.btn_access.setStyleSheet(
+            "QPushButton:checked{background:#F4A020;color:white;"
+            "font-weight:bold;}")
+        self.btn_access.toggled.connect(self._toggle_access)
+
+        hint_access = QLabel(
+            "For reference only \u2014 marks where an existing road meets "
+            "the boundary. Does not affect the subdivision.")
+        hint_access.setStyleSheet("color:#999;font-size:10px;")
+        hint_access.setWordWrap(True)
+
+        self.lst_access = QListWidget()
+        self.lst_access.setFixedHeight(60)
+        self.lst_access.setStyleSheet("font-size:10px;")
+        self.lst_access.setSelectionMode(QAbstractItemView.SingleSelection)
+
+        access_btns = QHBoxLayout()
+        self.btn_del_access = QPushButton("✕ Delete selected")
+        self.btn_del_access.setFixedHeight(26)
+        self.btn_del_access.setEnabled(False)
+        self.btn_del_access.clicked.connect(self._del_selected_access)
+        self.btn_clr_access = QPushButton("✕ Clear all")
+        self.btn_clr_access.setFixedHeight(26)
+        self.btn_clr_access.setEnabled(False)
+        self.btn_clr_access.clicked.connect(self._clear_access)
+        access_btns.addWidget(self.btn_del_access)
+        access_btns.addWidget(self.btn_clr_access)
+
+        self.lbl_access = QLabel("0 access point(s) marked")
+        self.lbl_access.setStyleSheet("font-size:11px;color:#444;")
+
+        self.lst_access.itemSelectionChanged.connect(
+            lambda: self.btn_del_access.setEnabled(
+                len(self.lst_access.selectedItems()) > 0))
+
+        for w in (self.btn_access, hint_access, self.lst_access):
+            v2b.addWidget(w)
+        v2b.addLayout(access_btns)
+        v2b.addWidget(self.lbl_access)
+        lv.addWidget(g2b)
+
         # Parameters
-        g3 = QGroupBox("3.  Parameters")
+        g3 = QGroupBox("4.  Parameters")
         g3.setStyleSheet("QGroupBox{font-weight:bold;color:#1A5C38;}")
         gr = QGridLayout(g3); gr.setSpacing(5)
 
@@ -280,6 +416,19 @@ class ParcellationDialog(QDialog):
             "than this before a cross-street gives mid-block vehicle access.\n"
             "0 = off (rows run the full width of the site).")
         gr.addWidget(self.sp_cross, 4, 1)
+
+        gr.addWidget(QLabel("Corner truncation (m):"), 5, 0)
+        self.sp_trunc = QDoubleSpinBox()
+        self.sp_trunc.setRange(0, 20); self.sp_trunc.setValue(0)
+        self.sp_trunc.setSingleStep(0.5); self.sp_trunc.setDecimals(1)
+        self.sp_trunc.setSpecialValueText("Off")
+        self.sp_trunc.setToolTip(
+            "Chamfers the corner of any plot that fronts two roads meeting\n"
+            "at a junction -- the standard corner-lot splay for sight-lines.\n"
+            "0 = off (sharp corners, matches v1.x output).\n"
+            "Check the truncation distance required by your local planning\n"
+            "authority before setting this -- it varies by jurisdiction.")
+        gr.addWidget(self.sp_trunc, 5, 1)
         lv.addWidget(g3)
 
         # Summary
@@ -490,9 +639,9 @@ class ParcellationDialog(QDialog):
                 "\n".join(errors[:5]))
 
         self._perimeter = pts
-        self._loaded()
+        self._loaded(source="paste")
 
-    def _loaded(self):
+    def _loaded(self, source="paste"):
         area = polygon_area_abs(self._perimeter)
         msg = (f"{len(self._perimeter)} pts  ·  "
                f"{area:,.1f} m²  ({area/10000:.4f} ha)")
@@ -503,10 +652,44 @@ class ParcellationDialog(QDialog):
         self._layer_peri()
         self._zoom()
         self._timer.start()
-        QMessageBox.information(self, "Perimeter Loaded",
-            f"Loaded {len(self._perimeter)} points.\n\n"
-            f"Area: {area:,.1f} m²  ({area/10000:.4f} ha)\n\n"
-            "Now draw roads (optional) and click Run Parcellation.")
+        self.btn_access.setEnabled(True)
+        # Force the project's (not just this layer's) working CRS to match
+        # self.crs *before* the basemap gets added. QGIS reprojects every
+        # layer to the PROJECT's destination CRS for display, not to each
+        # layer's own CRS -- so if the project CRS was left at whatever
+        # QGIS's default happened to be, both the OSM layer and the
+        # parcellation layers get reprojected into that third CRS, and any
+        # imprecision in the datum transform between it and the working
+        # CRS shows up as a visible offset even though nothing errors.
+        # self.crs is already a valid CRS object here (kept that way by
+        # the Working CRS picker), so no string parsing is needed.
+        try:
+            QgsProject.instance().setCrs(self.crs)
+            self.canvas.setDestinationCrs(self.crs)
+        except Exception as ex:
+            print(f"[Parcellation] project CRS: {ex}")
+        if self.chk_basemap.isChecked():
+            self._add_basemap_layer()
+        if source == "dxf":
+            # DXF carries no CRS metadata at all -- unlike manual paste,
+            # where the user was just looking at the Working CRS picker,
+            # someone importing a DXF is trusting the file and may not
+            # have thought to check it. The plugin genuinely cannot know
+            # what CRS a DXF's raw coordinates are in, so make this an
+            # explicit checkpoint rather than a silent assumption.
+            QMessageBox.information(self, "Perimeter Loaded from DXF",
+                f"Loaded {len(self._perimeter)} points.\n\n"
+                f"Area: {area:,.1f} m²  ({area/10000:.4f} ha)\n\n"
+                "DXF files don't carry coordinate system information -- "
+                f"please confirm \"Working CRS: {self._crs()}\" above "
+                "matches the CRS this DXF was actually drawn in before "
+                "running the parcellation.\n\n"
+                "Now draw roads (optional) and click Run Parcellation.")
+        else:
+            QMessageBox.information(self, "Perimeter Loaded",
+                f"Loaded {len(self._perimeter)} points.\n\n"
+                f"Area: {area:,.1f} m²  ({area/10000:.4f} ha)\n\n"
+                "Now draw roads (optional) and click Run Parcellation.")
 
     # ── DXF import ────────────────────────────────────────────────────────
 
@@ -548,7 +731,7 @@ class ParcellationDialog(QDialog):
                     "Use the coordinate entry tab instead.")
                 return
             self._perimeter = pts
-            self._loaded()
+            self._loaded(source="dxf")
         except Exception as ex:
             QMessageBox.critical(self, "DXF Error", str(ex))
 
@@ -563,6 +746,9 @@ class ParcellationDialog(QDialog):
         self.btn_xlsx.setEnabled(False)
         self.btn_pdf.setEnabled(False)
         self.btn_print.setEnabled(False)
+        self.btn_access.setEnabled(False)
+        self.btn_access.setChecked(False)
+        self._clear_access()
         self._del_layers()
         self._clr_tables()
         self.lbl_sum.setText("Run parcellation to see summary.")
@@ -659,6 +845,126 @@ class ParcellationDialog(QDialog):
         self.lbl_sum.setText("Run parcellation to see summary.")
         self._st("Roads cleared")
 
+    # ── Existing-access annotation (reference-only, never fed to engine) ───
+
+    def _toggle_access(self, on):
+        if on:
+            if not self._perimeter:
+                QMessageBox.information(self, "Mark Access",
+                    "Load a perimeter first.")
+                self.btn_access.setChecked(False)
+                return
+            self._access_tool = AccessAnnotationTool(self.canvas)
+            self._access_tool.access_finished.connect(self._access_done)
+            self._prev_tool = self.canvas.mapTool()
+            self.canvas.setMapTool(self._access_tool)
+            self._st("Click map to trace the existing access · Right-click to finish")
+        else:
+            if getattr(self, "_access_tool", None):
+                self.canvas.setMapTool(self._prev_tool)
+                self._access_tool.deactivate()
+                self._access_tool = None
+            self._st("Access marking stopped")
+
+    def _access_done(self, pts):
+        self._access_lines.append(pts)
+        n = len(self._access_lines)
+        length = sum(
+            ((pts[i+1][0]-pts[i][0])**2 + (pts[i+1][1]-pts[i][1])**2)**0.5
+            for i in range(len(pts)-1))
+        item = QListWidgetItem(
+            f"Access {n}  —  {len(pts)} pts  ·  {length:.1f} m")
+        item.setData(32, n-1)
+        self.lst_access.addItem(item)
+        self.lbl_access.setText(f"{n} access point(s) marked")
+        self.btn_clr_access.setEnabled(True)
+        self._layer_access()
+        self._st(f"Access {n} marked ({length:.1f} m). This is a reference "
+                  "line only — it does not affect the subdivision.")
+
+    def _del_selected_access(self):
+        items = self.lst_access.selectedItems()
+        if not items:
+            return
+        idx = items[0].data(32)
+        if 0 <= idx < len(self._access_lines):
+            self._access_lines.pop(idx)
+            self.lst_access.clear()
+            for i, rd in enumerate(self._access_lines):
+                length = sum(
+                    ((rd[j+1][0]-rd[j][0])**2 + (rd[j+1][1]-rd[j][1])**2)**0.5
+                    for j in range(len(rd)-1))
+                item = QListWidgetItem(
+                    f"Access {i+1}  —  {len(rd)} pts  ·  {length:.1f} m")
+                item.setData(32, i)
+                self.lst_access.addItem(item)
+            self.lbl_access.setText(f"{len(self._access_lines)} access point(s) marked")
+            self.btn_del_access.setEnabled(False)
+            self.btn_clr_access.setEnabled(len(self._access_lines) > 0)
+            self._layer_access()
+            self._st(f"Access line deleted. {len(self._access_lines)} remaining.")
+
+    def _clear_access(self):
+        # Unlike _clear_roads, this never touches self._result or the
+        # export buttons -- access lines are a reference overlay, not
+        # subdivision input, so clearing them can't invalidate a run.
+        self._access_lines = []
+        self.btn_access.setChecked(False)
+        self.lst_access.clear()
+        self.btn_del_access.setEnabled(False)
+        self.btn_clr_access.setEnabled(False)
+        self.lbl_access.setText("0 access point(s) marked")
+        self._del_layer("access")
+        self._st("Access markers cleared")
+
+    # ── OSM basemap ──────────────────────────────────────────────────────
+    # Kept deliberately separate from _layers/_del_layers (used by roads,
+    # plots, access annotations) -- this is a standing canvas preference,
+    # not per-run output, so it must survive Clear perimeter / re-runs.
+
+    def _toggle_basemap(self, checked):
+        if checked:
+            self._add_basemap_layer()
+        else:
+            self._remove_basemap_layer()
+
+    def _add_basemap_layer(self):
+        if self._basemap_layer is not None:
+            return  # already present -- avoid adding a second copy
+        try:
+            uri = ("type=xyz&url=https://tile.openstreetmap.org/%7Bz%7D/%7Bx%7D/"
+                   "%7By%7D.png&zmax=19&zmin=0")
+            lyr = QgsRasterLayer(uri, "OpenStreetMap", "wms")
+            if not lyr.isValid():
+                # No network, or the tile source is unreachable right now --
+                # same silent-fallback philosophy as the report: don't pop
+                # an error, just leave the canvas as it was and un-check
+                # the box so the UI reflects reality.
+                self._st("OSM basemap unavailable (no connection?) — continuing without it.")
+                self.chk_basemap.blockSignals(True)
+                self.chk_basemap.setChecked(False)
+                self.chk_basemap.blockSignals(False)
+                return
+            QgsProject.instance().addMapLayer(lyr, False)
+            QgsProject.instance().layerTreeRoot().insertLayer(-1, lyr)  # bottom of stack
+            self._basemap_layer = lyr
+            lyr.triggerRepaint()
+            self.canvas.refresh()
+        except Exception as ex:
+            print(f"[Parcellation] basemap layer: {ex}")
+            self.chk_basemap.blockSignals(True)
+            self.chk_basemap.setChecked(False)
+            self.chk_basemap.blockSignals(False)
+
+    def _remove_basemap_layer(self):
+        if self._basemap_layer is not None:
+            try:
+                QgsProject.instance().removeMapLayer(self._basemap_layer.id())
+            except Exception:
+                pass
+            self._basemap_layer = None
+            self.canvas.refresh()
+
     # ── Subdivision ───────────────────────────────────────────────────────
 
     def _run(self):
@@ -676,7 +982,8 @@ class ParcellationDialog(QDialog):
             plot_area=self.sp_area.value(),
             frontage=self.sp_front.value(),
             road_width=self.sp_road.value(),
-            cross_road_spacing=self.sp_cross.value())
+            cross_road_spacing=self.sp_cross.value(),
+            corner_truncation=self.sp_trunc.value())
 
         self._worker = SubdivisionWorker(eng)
         self._worker.finished.connect(self._done)
@@ -684,6 +991,15 @@ class ParcellationDialog(QDialog):
         self._worker.start()
 
     def _done(self, result):
+        # Bolt-on extra attributes, same convention as plot.kind elsewhere
+        # in this codebase -- ParcellationResult doesn't declare these
+        # fields, but report_export.py reads them defensively via
+        # getattr(), so older result objects (or the other engine) still
+        # work fine without them.
+        result.access_lines  = list(self._access_lines)
+        result.show_basemap  = self.chk_basemap.isChecked()
+        result.crs_obj       = self.crs  # actual QgsCoordinateReferenceSystem
+                                          # object -- no string round-trip
         self._result = result
         self.prog.setVisible(False)
         self.btn_run.setEnabled(True)
@@ -696,6 +1012,7 @@ class ParcellationDialog(QDialog):
         ll_line = f"🚫 Landlocked: {n_ll}\n" if n_ll else "✅ Landlocked: 0\n"
 
         if s.get("engine") == "road_aware":
+            trunc_line = f"✂️ Truncated corners: {s.get('n_truncated', 0)}\n" if s.get('corner_truncation_m', 0) > 0 else ""
             self.lbl_sum.setText(
                 f"Perimeter: {s['perimeter_area_m2']:,.1f} m²\n"
                 f"Road area: {s['road_area_m2']:,.1f} m²\n"
@@ -703,6 +1020,7 @@ class ParcellationDialog(QDialog):
                 f"✅ Standard: {s.get('n_standard',0)}\n"
                 f"🟢 Merged (bonus): {s.get('n_merged',0)}\n"
                 f"🟣 Reduced (corner): {s.get('n_reduced',0)}\n"
+                f"{trunc_line}"
                 f"{ll_line}"
                 f"Coverage: {s.get('coverage_pct',0)}%")
         else:
@@ -732,11 +1050,36 @@ class ParcellationDialog(QDialog):
     # ── Layers ────────────────────────────────────────────────────────────
 
     def _crs(self):
+        # No hardcoded regional fallback -- self.crs is kept valid at all
+        # times by the QgsProjectionSelectionWidget (see __init__ and
+        # _crs_changed), which is the only thing allowed to determine the
+        # working CRS. An empty string here is an honest signal that
+        # something upstream is broken, rather than silently mislabeling
+        # data with a plausible-looking but wrong region.
         try:
-            return self.crs.authid() if self.crs and self.crs.isValid() \
-                   else "EPSG:26333"
+            return self.crs.authid() if self.crs and self.crs.isValid() else ""
         except Exception:
-            return "EPSG:26333"
+            return ""
+
+    def _crs_changed(self, new_crs):
+        """Fires when the user picks a different CRS in the Working CRS
+        widget. This is the ONLY place self.crs changes after __init__ --
+        everything else (perimeter loading, layer creation, the basemap)
+        reads it via self._crs()/self.crs, so changing it here is enough
+        to make the whole session consistent."""
+        if not new_crs or not new_crs.isValid():
+            return
+        self.crs = new_crs
+        try:
+            QgsProject.instance().setCrs(new_crs)
+            self.canvas.setDestinationCrs(new_crs)
+        except Exception as ex:
+            print(f"[Parcellation] project CRS: {ex}")
+        if self._perimeter or self._result:
+            self._st(f"Working CRS changed to {self._crs()} — reload your "
+                      "perimeter and re-run to apply it to the current data.")
+        else:
+            self._st(f"Working CRS set to {self._crs()}")
 
     def _get_lyr(self, key, name, geom, fields=None):
         if key in self._layers:
@@ -805,6 +1148,32 @@ class ParcellationDialog(QDialog):
             lyr.triggerRepaint()
         except Exception as ex:
             print(f"[Parcellation] road layer: {ex}")
+
+    def _layer_access(self):
+        try:
+            self._del_layer("access")
+            uri = f"LineString?crs={self._crs()}"
+            lyr = QgsVectorLayer(uri, "Parcellation — Existing access (reference)", "memory")
+            if not lyr.isValid():
+                return
+            QgsProject.instance().addMapLayer(lyr)
+            self._layers["access"] = lyr
+            lyr.startEditing()
+            for rd in self._access_lines:
+                f = QgsFeature(lyr.fields())
+                f.setGeometry(QgsGeometry.fromPolylineXY(
+                    [QgsPointXY(e, n) for e, n in rd]))
+                lyr.addFeature(f)
+            lyr.commitChanges()
+            lyr.updateExtents()
+            lyr.setRenderer(QgsSingleSymbolRenderer(
+                QgsLineSymbol.createSimple({
+                    "color": "244,160,32",
+                    "line_width": "1.0",
+                    "line_style": "dash"})))
+            lyr.triggerRepaint()
+        except Exception as ex:
+            print(f"[Parcellation] access layer: {ex}")
 
     def _layer_result(self, result):
         try:
